@@ -1,0 +1,48 @@
+# Chamonix-Mont-Blanc — second resort, pipeline repeatability test
+
+name = "Chamonix"
+slug = "chamonix"
+
+[bbox] # Les Houches to Grands Montets; Le Tour excluded (crosses 46N)
+west = 6.78
+south = 45.87
+east = 7.02
+north = 45.99
+
+[terrain]
+heightmap_size = 512
+target_size = 10.0
+z_exaggeration = 1.6
+
+[style]
+smooth_m = 35
+macro_m = 400
+detail_gain = 0.8
+valley_gamma = 1.2
+
+[boundary]
+buffer_m = 600
+smooth_m = 500
+simplify_m = 120
+
+[materials]
+treeline_m = 2000      # Chamonix treeline is lower than Val d'Isère
+treeline_blend_m = 150
+rock_slope_deg = 45
+rock_blend_deg = 7
+outcrop_slope_deg = 28
+outcrop_scale = 6.0
+outcrop_amount = 0.45
+
+[features]
+piste_radius = 0.014
+lift_clearance = 0.05
+pylon_spacing_m = 350
+min_piste_len_m = 250
+
+[underside]
+depth_frac = 0.22
+rings = 14
+taper = 0.85
+lip_bulge = 0.045
+lip_rings = 3

@@ -17,7 +17,11 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
 
 QUERY = """
 [out:json][timeout:90];
@@ -35,14 +39,24 @@ def main() -> None:
     b = config["bbox"]
 
     query = QUERY.format(s=b["south"], w=b["west"], n=b["north"], e=b["east"])
-    req = urllib.request.Request(
-        OVERPASS_URL,
-        data=urllib.parse.urlencode({"data": query}).encode(),
-        headers={"User-Agent": "carve-canvas terrain pipeline"},
-    )
     print(f"[{config['name']}] querying Overpass for pistes + lifts ...")
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.load(resp)
+    data = None
+    for attempt, url in enumerate(OVERPASS_URLS * 2):
+        try:
+            req = urllib.request.Request(
+                url,
+                data=urllib.parse.urlencode({"data": query}).encode(),
+                headers={"User-Agent": "carve-canvas terrain pipeline"},
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                data = json.load(resp)
+            break
+        except Exception as exc:  # busy public servers 504/429 routinely
+            print(f"  {url.split('/')[2]}: {exc} — trying next mirror")
+            import time
+            time.sleep(5 * (attempt + 1))
+    if data is None:
+        raise SystemExit("all Overpass mirrors failed — try again later")
 
     out = ROOT / "data" / config["slug"] / "osm.json"
     out.parent.mkdir(parents=True, exist_ok=True)
