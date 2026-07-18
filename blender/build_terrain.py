@@ -348,6 +348,17 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
         nt.links.new(outcrop.outputs[0], rockiness.inputs[1])
         rockiness = rockiness.outputs[0]
 
+    # Wind-scoured ridgelines: convex crests (high pointiness) show partial
+    # bare rock — characteristic alpine look. Cycles-only; harmless in EEVEE.
+    ridge = map_range(geo.outputs["Pointiness"], 0.58, 0.70)
+    ridge_soft = node("ShaderNodeMath", operation="MULTIPLY")
+    ridge_soft.inputs[1].default_value = 0.55
+    nt.links.new(ridge, ridge_soft.inputs[0])
+    ridge_max = node("ShaderNodeMath", operation="MAXIMUM")
+    nt.links.new(rockiness, ridge_max.inputs[0])
+    nt.links.new(ridge_soft.outputs[0], ridge_max.inputs[1])
+    rockiness = ridge_max.outputs[0]
+
     # Snow lip: suppress rock on the upper skirt so the rim reads as a
     # thick snow blanket folding over the edge
     lip_attr = node("ShaderNodeAttribute", attribute_name="snow_lip")
@@ -732,6 +743,16 @@ def add_features(config, H, mask, meta, parent=None):
     spacing_px = f["pylon_spacing_m"] / meta["pixel_size_m"][0]
     py_verts, py_faces = [], []
     w = 0.006  # pylon half-width
+
+    def add_box(x0, y0, z0, z1, hw):
+        base = len(py_verts)
+        for zz in (z0, z1):
+            py_verts.extend([(x0 - hw, y0 - hw, zz), (x0 + hw, y0 - hw, zz),
+                             (x0 + hw, y0 + hw, zz), (x0 - hw, y0 + hw, zz)])
+        for k in range(4):
+            k2 = (k + 1) % 4
+            py_faces.append([base + k, base + k2, base + 4 + k2, base + 4 + k])
+        py_faces.append([base + 4, base + 5, base + 6, base + 7])  # roof
     n_lifts = 0
     ch_verts, ch_faces = [], []
     chair_spacing = 130 / meta["pixel_size_m"][0]  # a chair every ~130m
@@ -763,19 +784,12 @@ def add_features(config, H, mask, meta, parent=None):
                 i = int(np.searchsorted(arc, d))
                 add_chair(x[i], y[i], ground[i] + clearance)
             # pylons at regular arc-length intervals
-            seg = np.hypot(np.diff(cols[a:b]), np.diff(rows[a:b]))
-            arc = np.concatenate([[0], np.cumsum(seg)])
             for d in np.arange(spacing_px / 2, arc[-1], spacing_px):
                 i = int(np.searchsorted(arc, d))
-                base = len(py_verts)
-                x0, y0 = x[i], y[i]
-                z0, z1 = ground[i] - 0.01, ground[i] + clearance
-                for zz in (z0, z1):
-                    py_verts += [(x0 - w, y0 - w, zz), (x0 + w, y0 - w, zz),
-                                 (x0 + w, y0 + w, zz), (x0 - w, y0 + w, zz)]
-                for k in range(4):
-                    k2 = (k + 1) % 4
-                    py_faces.append([base + k, base + k2, base + 4 + k2, base + 4 + k])
+                add_box(x[i], y[i], ground[i] - 0.01, ground[i] + clearance, w)
+            # stations: chunky sheds at both cable ends
+            for i in (0, len(x) - 1):
+                add_box(x[i], y[i], ground[i] - 0.01, ground[i] + clearance * 0.75, 0.012)
 
     if py_verts:
         pm = bpy.data.meshes.new("pylons")

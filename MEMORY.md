@@ -67,8 +67,17 @@ Append-only. Newest at the bottom. Keep entries short.
   terrain. Fast to build, fast to render, easy to restyle.
 - **Showcase renders** in docs/ (val-disere.png, chamonix.png,
   val-disere-village.png), embedded in README.
-- **Known gaps / next ideas**: piste ribbons could gap where they cross
-  village (currently overlap roofs slightly); nursery-slope area
-  patches; clouds below island; ridge pointiness rock; lift stations at
-  cable ends; night/dusk lighting variant; Whistler or a Norwegian
-  resort as non-Alps test (W-longitude tile naming untested).
+- **Lift stations shipped**: chunky sheds at both ends of every cable
+  (shared add_box helper with pylons).
+- **Ridge scouring shipped**: Cycles Pointiness > 0.58 blends partial
+  rock on convex crests (×0.55, applied before snow-lip suppression so
+  the rim stays snowy). EEVEE ignores it gracefully.
+- **Whistler proves "any mountain on Earth"**: W-longitude naming,
+  UTM 10N, >50°N Copernicus band, two-lobe island — zero code changes.
+  59% forest → 19k trees; 807 OSM piste ways (NA mapping is dense).
+  Three resorts in README gallery now.
+- **Known gaps / next ideas**: piste ribbons overlap village roofs
+  slightly; nursery-slope area patches instead of line spaghetti;
+  clouds below island; night/dusk lighting variant; cable sag;
+  southern-hemisphere resort (S-latitude tile naming untested);
+  villages could use varied building types (church, hotel blocks).

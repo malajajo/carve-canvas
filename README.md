@@ -3,9 +3,9 @@
 Turns real-world ski resorts into stylised floating 3D dioramas.
 See `Project_Vision_Stylised_Ski_Resorts.md` for the vision.
 
-| Val d'Isère | Chamonix |
-|---|---|
-| ![Val d'Isère](docs/val-disere.png) | ![Chamonix](docs/chamonix.png) |
+| Val d'Isère | Chamonix | Whistler |
+|---|---|---|
+| ![Val d'Isère](docs/val-disere.png) | ![Chamonix](docs/chamonix.png) | ![Whistler](docs/whistler.png) |
 
 Everything is generated from open data: Copernicus DEM terrain,
 OpenStreetMap pistes/lifts (real difficulty colours), ESA WorldCover
