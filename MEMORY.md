@@ -37,3 +37,14 @@ Append-only. Newest at the bottom. Keep entries short.
   (min_piste_len_m), endpoint-preserving smoothing on ribbons.
   246 → 119 ribbons. Village beginner zone still dense — future idea:
   render nursery/converging zones as groomed area patches, not lines.
+- **Style calibration from user**: reference image = mood board only.
+  Aim midpoint between it and reality — near-true scale, not hyper-toy.
+- **Sky + light + snow lip shipped**: Nishita sky (elev 22°, rotation 0°
+  — chosen by 3-way A/B render; 90° is flat, 225° moody), exposure -1.3,
+  AgX Punchy look. Snow lip = outward bulge on upper skirt rings +
+  "snow_lip" float attribute suppressing rock in shader. Underside now
+  reads all-snow (taper walls are <45°) — revisit if too floaty; option:
+  steeper rock threshold or AO-darkened belly.
+- **Lesson**: physically-correct sky needs exposure management — always
+  re-check exposure after lighting changes, and A/B test sun azimuth
+  with cheap 16-sample renders instead of guessing.

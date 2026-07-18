@@ -148,6 +148,7 @@ def build_mesh(config, H, mask, meta, landcover=None):
     ring_xy = top_ring[:, :2].copy()
     ring_z0 = top_ring[:, 2].copy()
 
+    lip_weight = {}  # vertex id -> snow-lip strength (1 = fully snowy wall)
     prev_ids = list(boundary)
     for k in range(1, n_rings + 1):
         tk = k / n_rings
@@ -156,12 +157,18 @@ def build_mesh(config, H, mask, meta, landcover=None):
             ring_xy = 0.5 * ring_xy + 0.25 * (np.roll(ring_xy, 1, axis=0) + np.roll(ring_xy, -1, axis=0))
         centroid = ring_xy.mean(axis=0)
         s = np.cos(0.96 * tk * np.pi / 2) ** u["taper"]
+        # Snow-lip bulge: the rim curls slightly outward before tapering in,
+        # like a thick blanket of snow overhanging the edge
+        s *= 1.0 + u["lip_bulge"] * np.sin(np.pi * min(tk / 0.3, 1.0))
         xy = centroid + (ring_xy - centroid) * s
         z = ring_z0 * (1 - tk) + (-depth) * tk
 
         ring_start = len(verts)
         verts = np.vstack([verts, np.column_stack([xy, z])])
         ring_ids = list(range(ring_start, ring_start + nb))
+        lw = max(0.0, 1.0 - (k - 1) / max(u["lip_rings"], 1))
+        for vid in ring_ids:
+            lip_weight[vid] = lw
         for i in range(nb):
             i2 = (i + 1) % nb
             faces.append([prev_ids[i], prev_ids[i2], ring_ids[i2], ring_ids[i]])
@@ -210,6 +217,15 @@ def build_mesh(config, H, mask, meta, landcover=None):
             col[on_grid, channel] = landcover[name].ravel()[gi]
         attr = mesh.color_attributes.new(name="landcover", type="FLOAT_COLOR", domain="POINT")
         attr.data.foreach_set("color", col.ravel())
+
+    # --- Snow-lip weights: upper skirt rings read as snow, not rock ---
+    lip = np.zeros(len(used), dtype=np.float32)
+    for vid, w in lip_weight.items():
+        idx = remap[vid]
+        if idx >= 0:
+            lip[idx] = w
+    lip_attr = mesh.attributes.new(name="snow_lip", type="FLOAT", domain="POINT")
+    lip_attr.data.foreach_set("value", lip)
 
     obj = bpy.data.objects.new(config["name"], mesh)
     bpy.context.collection.objects.link(obj)
@@ -331,6 +347,17 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
         nt.links.new(steep, rockiness.inputs[0])
         nt.links.new(outcrop.outputs[0], rockiness.inputs[1])
         rockiness = rockiness.outputs[0]
+
+    # Snow lip: suppress rock on the upper skirt so the rim reads as a
+    # thick snow blanket folding over the edge
+    lip_attr = node("ShaderNodeAttribute", attribute_name="snow_lip")
+    lip_sub = node("ShaderNodeMath", operation="SUBTRACT", use_clamp=True)
+    nt.links.new(rockiness, lip_sub.inputs[0])
+    lip_scaled = node("ShaderNodeMath", operation="MULTIPLY")
+    lip_scaled.inputs[1].default_value = 1.5
+    nt.links.new(lip_attr.outputs["Fac"], lip_scaled.inputs[0])
+    nt.links.new(lip_scaled.outputs[0], lip_sub.inputs[1])
+    rockiness = lip_sub.outputs[0]
 
     # snow (glacier-tinted where applicable) -> forest -> rock
     base = SNOW
@@ -527,18 +554,26 @@ def add_features(config, H, mask, meta, parent=None):
 
 
 def add_lighting_and_camera(obj):
-    # Low-ish raking sun from the NW so relief reads clearly
-    sun_data = bpy.data.lights.new("sun", type="SUN")
-    sun_data.energy = 4.0
-    sun_data.angle = 0.06  # slightly soft shadow edges
-    sun = bpy.data.objects.new("Sun", sun_data)
-    sun.rotation_euler = (1.1, 0.0, 2.4)
-    bpy.context.collection.objects.link(sun)
+    from math import radians
 
-    # Soft grey world background so previews aren't floating in blackness
+    # Physically-based sky (Nishita): blue sky, warm low sun, alpine light.
+    # The sky's own sun disc is the light source — no separate sun lamp.
     world = bpy.data.worlds.new("world")
-    world.node_tree.nodes["Background"].inputs["Color"].default_value = (0.35, 0.38, 0.45, 1.0)
+    nt = world.node_tree
+    sky = nt.nodes.new("ShaderNodeTexSky")
+    sky.sun_elevation = radians(22)   # low = raking shadows + warm tone
+    sky.sun_rotation = radians(0)     # chosen by A/B render test — best relief
+    sky.altitude = 2000               # metres — thinner alpine atmosphere
+    nt.links.new(sky.outputs["Color"], nt.nodes["Background"].inputs["Color"])
     bpy.context.scene.world = world
+
+    # The physical sky is bright — pull exposure down and add contrast
+    vs = bpy.context.scene.view_settings
+    vs.exposure = -1.3
+    try:
+        vs.look = "AgX - Punchy"
+    except TypeError:
+        pass  # look name differs across versions; default is fine
 
     # Frame the camera on the object's bounding box from a 3/4 angle
     bb = np.array(obj.bound_box)

@@ -6,12 +6,12 @@ decisions and learnings to `MEMORY.md` as they happen.**
 
 ## Style north star
 
-`docs/style-reference.png` — soft, toy-like floating snow island:
-thick marshmallow snow with a dripping lip at the edges, chunky stylised
-pines, wooden chalets, chairlifts with visible chairs, warm sunny
-lighting, blue sky with clouds. Saturated, rounded, collectible.
-Soft terrain is a feature, not a bug — but geography must stay
-recognisable.
+`docs/style-reference.png` shows the *mood*: floating snow island,
+thick snow lip at the edges, stylised pines, chalets, chairlifts,
+warm sunny lighting, blue sky. BUT do not copy its hyper-toy look —
+the target is the midpoint between that and reality: things closer to
+true scale, real geography readable, softly stylised rather than
+candy-cute. When in doubt, err toward realistic proportions.
 
 ## Commands
 

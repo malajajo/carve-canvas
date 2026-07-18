@@ -41,6 +41,8 @@ min_piste_len_m = 250  # drop connector stubs shorter than this (after chaining)
 depth_frac = 0.22      # island depth below lowest terrain, fraction of longest side
 rings = 14             # vertical resolution of the taper
 taper = 0.85           # cos-profile exponent; lower = fuller belly, higher = sharper cone
+lip_bulge = 0.045      # outward bulge of the snow lip at the island rim
+lip_rings = 3          # how many upper rings stay snow-covered
 
 [boundary]
 # Boundary is auto-derived from OSM pistes + lifts:
