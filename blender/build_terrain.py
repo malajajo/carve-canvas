@@ -370,8 +370,12 @@ PISTE_COLORS = {
 STEEL = (0.06, 0.06, 0.07, 1.0)
 
 
-def add_features(config, H, mask, meta):
-    """Drape pistes as coloured ribbons and lifts as cables with pylons."""
+def add_features(config, H, mask, meta, parent=None):
+    """Drape pistes as coloured ribbons and lifts as cables with pylons.
+
+    All created objects are parented to `parent` (the terrain) so the
+    whole diorama moves/rotates/scales as one model.
+    """
     data_dir = ROOT / "data" / config["slug"]
     fpath = data_dir / "features.json"
     if not fpath.exists():
@@ -442,6 +446,7 @@ def add_features(config, H, mask, meta):
         cd.bevel_resolution = 2
         cd.materials.append(flat_material(f"{name}_mat", color))
         obj = bpy.data.objects.new(name, cd)
+        obj.parent = parent
         bpy.context.collection.objects.link(obj)
         return cd
 
@@ -505,6 +510,7 @@ def add_features(config, H, mask, meta):
         pm.validate()
         pm.materials.append(flat_material("pylon_mat", STEEL))
         obj = bpy.data.objects.new("lift_pylons", pm)
+        obj.parent = parent
         bpy.context.collection.objects.link(obj)
 
     print(f"features: {n_pistes} piste segments, {n_lifts} lift cables, "
@@ -554,7 +560,7 @@ def main():
     t = config["terrain"]
     z_scale = t["target_size"] / max(meta["extent_m"]) * t["z_exaggeration"]
     add_material(obj, config, float(heightmap[mask].min()), z_scale, landcover)
-    add_features(config, heightmap, mask, meta)
+    add_features(config, heightmap, mask, meta, parent=obj)
     add_lighting_and_camera(obj)
 
     # Open in Material Preview so colours show immediately (Solid mode is
