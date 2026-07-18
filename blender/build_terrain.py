@@ -517,6 +517,91 @@ def add_trees(config, H, mask, landcover, meta, parent):
     print(f"trees: {len(rows)} pines placed ({int(snowy.sum())} snowy)")
 
 
+WALL = (0.23, 0.13, 0.06, 1.0)   # warm timber
+ROOF_SNOW = (0.90, 0.92, 0.95, 1.0)
+
+
+def add_chalets(config, H, mask, landcover, meta, parent):
+    """Gabled chalets seeded from the WorldCover built-up mask."""
+    if landcover is None:
+        return
+    t = config["terrain"]
+    ny, nx = H.shape
+    extent_x, extent_y = meta["extent_m"]
+    scale = t["target_size"] / max(extent_x, extent_y)
+    dx = extent_x / (nx - 1) * scale
+    dy = extent_y / (ny - 1) * scale
+    Z = (H - H[mask].min()) * scale * t["z_exaggeration"]
+
+    built = landcover["built"] * mask
+    rng = np.random.default_rng(7)
+    # Denser sampling than trees: a village cell can hold several buildings
+    p = np.clip(built * 2.2, 0, 1)
+    rows, cols = np.nonzero(rng.random(p.shape) < p)
+    extra = rng.random(len(rows)) < np.clip(built[rows, cols] * 1.2 - 0.4, 0, 0.8)
+    rows = np.concatenate([rows, rows[extra]])
+    cols = np.concatenate([cols, cols[extra]])
+    if len(rows) == 0:
+        print("chalets: no built-up cells inside boundary")
+        return
+
+    jit = rng.random((len(rows), 2))
+    bcols, brows = cols + jit[:, 0], rows + jit[:, 1]
+    x = (bcols - (nx - 1) / 2) * dx
+    y = ((ny - 1) / 2 - brows) * dy
+    c0 = np.clip(bcols, 0, nx - 1.001).astype(int)
+    r0 = np.clip(brows, 0, ny - 1.001).astype(int)
+    fc, fr = bcols - c0, brows - r0
+    z = (Z[r0, c0] * (1 - fc) * (1 - fr) + Z[r0, c0 + 1] * fc * (1 - fr)
+         + Z[r0 + 1, c0] * (1 - fc) * fr + Z[r0 + 1, c0 + 1] * fc * fr)
+
+    # Template gabled house, unit footprint, wall height 0.55, ridge 1.0
+    hv = np.array([
+        (-0.5, -0.35, 0.0), (0.5, -0.35, 0.0), (0.5, 0.35, 0.0), (-0.5, 0.35, 0.0),
+        (-0.5, -0.35, 0.55), (0.5, -0.35, 0.55), (0.5, 0.35, 0.55), (-0.5, 0.35, 0.55),
+        (-0.5, 0.0, 1.0), (0.5, 0.0, 1.0),
+    ])
+    hf = [([0, 1, 5, 4], 0), ([1, 2, 6, 5], 0), ([2, 3, 7, 6], 0), ([3, 0, 4, 7], 0),
+          ([4, 5, 9, 8], 1), ([6, 7, 8, 9], 1), ([5, 6, 9], 0), ([7, 4, 8], 0)]
+
+    base_w = 18 * scale  # ~18m footprint, stylised
+    sizes = base_w * rng.uniform(0.7, 1.9, len(rows))
+    heights = sizes * rng.uniform(0.55, 0.75, len(rows))
+    angles = rng.uniform(0, 2 * np.pi, len(rows))
+
+    all_verts = np.empty((len(rows), len(hv), 3))
+    cosa, sina = np.cos(angles), np.sin(angles)
+    vx, vy, vz = hv[:, 0], hv[:, 1], hv[:, 2]
+    all_verts[..., 0] = (vx[None] * cosa[:, None] - vy[None] * sina[:, None]) * sizes[:, None] + x[:, None]
+    all_verts[..., 1] = (vx[None] * sina[:, None] + vy[None] * cosa[:, None]) * sizes[:, None] + y[:, None]
+    all_verts[..., 2] = vz[None] * heights[:, None] + (z - 0.25 * heights)[:, None]
+
+    nvh = len(hv)
+    all_faces, all_mats = [], []
+    for i in range(len(rows)):
+        off = i * nvh
+        for f, m in hf:
+            all_faces.append([v + off for v in f])
+            all_mats.append(m)
+
+    mesh = bpy.data.meshes.new("chalets")
+    mesh.from_pydata(all_verts.reshape(-1, 3).tolist(), [], all_faces)
+    mesh.validate()
+
+    for name, color in (("chalet_wall", WALL), ("chalet_roof", ROOF_SNOW)):
+        mat = bpy.data.materials.new(name)
+        bsdf = mat.node_tree.nodes["Principled BSDF"]
+        bsdf.inputs["Base Color"].default_value = color
+        bsdf.inputs["Roughness"].default_value = 0.75
+        mesh.materials.append(mat)
+    mesh.polygons.foreach_set("material_index", all_mats)
+
+    obj = bpy.data.objects.new("chalets", mesh)
+    obj.parent = parent
+    bpy.context.collection.objects.link(obj)
+    print(f"chalets: {len(rows)} buildings placed")
+
+
 # European piste colour convention (linear RGB)
 PISTE_COLORS = {
     "novice": (0.10, 0.55, 0.15, 1.0),
@@ -648,6 +733,21 @@ def add_features(config, H, mask, meta, parent=None):
     py_verts, py_faces = [], []
     w = 0.006  # pylon half-width
     n_lifts = 0
+    ch_verts, ch_faces = [], []
+    chair_spacing = 130 / meta["pixel_size_m"][0]  # a chair every ~130m
+    cw = 0.004  # chair half-size
+
+    def add_chair(x0, y0, ztop):
+        base = len(ch_verts)
+        # hanger bar + seat box hanging under the cable
+        for zz in (ztop, ztop - 0.010):
+            ch_verts.extend([(x0 - cw, y0 - cw, zz), (x0 + cw, y0 - cw, zz),
+                             (x0 + cw, y0 + cw, zz), (x0 - cw, y0 + cw, zz)])
+        for k in range(4):
+            k2 = (k + 1) % 4
+            ch_faces.append([base + k, base + k2, base + 4 + k2, base + 4 + k])
+        ch_faces.append([base + 4, base + 5, base + 6, base + 7])
+
     for lift in feats["lifts"]:
         pts = densify(lift["points"], step=1.5)
         cols, rows = pts[:, 0], pts[:, 1]
@@ -657,6 +757,11 @@ def add_features(config, H, mask, meta, parent=None):
             ground = sample_z(cols[a:b], rows[a:b])
             add_spline(cable, x, y, ground + clearance)
             n_lifts += 1
+            seg = np.hypot(np.diff(cols[a:b]), np.diff(rows[a:b]))
+            arc = np.concatenate([[0], np.cumsum(seg)])
+            for d in np.arange(chair_spacing / 3, arc[-1], chair_spacing):
+                i = int(np.searchsorted(arc, d))
+                add_chair(x[i], y[i], ground[i] + clearance)
             # pylons at regular arc-length intervals
             seg = np.hypot(np.diff(cols[a:b]), np.diff(rows[a:b]))
             arc = np.concatenate([[0], np.cumsum(seg)])
@@ -681,8 +786,17 @@ def add_features(config, H, mask, meta, parent=None):
         obj.parent = parent
         bpy.context.collection.objects.link(obj)
 
+    if ch_verts:
+        cm = bpy.data.meshes.new("chairs")
+        cm.from_pydata(ch_verts, [], ch_faces)
+        cm.validate()
+        cm.materials.append(flat_material("chair_mat", STEEL))
+        obj = bpy.data.objects.new("lift_chairs", cm)
+        obj.parent = parent
+        bpy.context.collection.objects.link(obj)
+
     print(f"features: {n_pistes} piste segments, {n_lifts} lift cables, "
-          f"{len(py_verts) // 8} pylons")
+          f"{len(py_verts) // 8} pylons, {len(ch_verts) // 8} chairs")
 
 
 def add_lighting_and_camera(obj):
@@ -738,6 +852,7 @@ def main():
     add_material(obj, config, float(heightmap[mask].min()), z_scale, landcover)
     add_features(config, heightmap, mask, meta, parent=obj)
     add_trees(config, heightmap, mask, landcover, meta, parent=obj)
+    add_chalets(config, heightmap, mask, landcover, meta, parent=obj)
     add_lighting_and_camera(obj)
 
     # Open in Material Preview so colours show immediately (Solid mode is
