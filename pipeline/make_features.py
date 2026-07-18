@@ -10,6 +10,7 @@ Usage:
 """
 
 import json
+import math
 import sys
 import tomllib
 from pathlib import Path
@@ -38,14 +39,20 @@ def main() -> None:
         xs, ys = warp_transform("EPSG:4326", meta["crs"], lons, lats)
         return [list(inv * (x, y)) for x, y in zip(xs, ys)]
 
-    pistes, lifts = [], []
+    raw_pistes, lifts = [], []
+    n_closed = 0
     for el in osm["elements"]:
         tags = el.get("tags", {})
         geom = el.get("geometry")
         if not geom or len(geom) < 2:
             continue
         if "piste:type" in tags:
-            pistes.append({
+            # Skip area-mapped pistes (closed polygons) — as ribbons they
+            # render as ugly loops. TODO: could become groomed-area patches.
+            if geom[0] == geom[-1]:
+                n_closed += 1
+                continue
+            raw_pistes.append({
                 "name": tags.get("name", ""),
                 "difficulty": tags.get("piste:difficulty", "intermediate"),
                 "points": project(geom),
@@ -57,9 +64,54 @@ def main() -> None:
                 "points": project(geom),
             })
 
+    # --- Chain fragmented ways: same name+difficulty, touching endpoints ---
+    def near(a, b, tol=1.5):
+        return math.hypot(a[0] - b[0], a[1] - b[1]) < tol
+
+    groups = {}
+    for p in raw_pistes:
+        groups.setdefault((p["name"], p["difficulty"]), []).append(p["points"])
+
+    pistes = []
+    for (name, diff), ways in groups.items():
+        chains = []
+        while ways:
+            cur = ways.pop()
+            extended = True
+            while extended:
+                extended = False
+                for i, w in enumerate(ways):
+                    if near(cur[-1], w[0]):
+                        cur = cur + w[1:]
+                    elif near(cur[-1], w[-1]):
+                        cur = cur + w[::-1][1:]
+                    elif near(cur[0], w[-1]):
+                        cur = w[:-1] + cur
+                    elif near(cur[0], w[0]):
+                        cur = w[::-1][:-1] + cur
+                    else:
+                        continue
+                    ways.pop(i)
+                    extended = True
+                    break
+            chains.append(cur)
+        for chain in chains:
+            pistes.append({"name": name, "difficulty": diff, "points": chain})
+
+    # --- Drop stubs: short connectors clutter the map ---
+    px_m = meta["pixel_size_m"][0]
+    min_len = config["features"].get("min_piste_len_m", 250)
+
+    def length_m(points):
+        return sum(math.hypot(b[0] - a[0], b[1] - a[1])
+                   for a, b in zip(points[:-1], points[1:])) * px_m
+
+    kept = [p for p in pistes if length_m(p["points"]) >= min_len]
+
     out = data_dir / "features.json"
-    out.write_text(json.dumps({"pistes": pistes, "lifts": lifts}))
-    print(f"wrote {out} ({len(pistes)} pistes, {len(lifts)} lifts)")
+    out.write_text(json.dumps({"pistes": kept, "lifts": lifts}))
+    print(f"wrote {out}: {len(raw_pistes)} open ways ({n_closed} closed dropped) "
+          f"-> {len(pistes)} chains -> {len(kept)} pistes >= {min_len}m; {len(lifts)} lifts")
 
 
 if __name__ == "__main__":

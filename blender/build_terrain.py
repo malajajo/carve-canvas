@@ -419,6 +419,15 @@ def add_features(config, H, mask, meta, parent=None):
                 out.append(a + (b - a) * (i / n))
         return np.array(out)
 
+    def smooth_polyline(pts, iters=3):
+        """Endpoint-preserving relaxation — swoopy stylised lines, not GPS jags."""
+        p = np.asarray(pts, dtype=np.float64).copy()
+        for _ in range(iters):
+            if len(p) < 3:
+                break
+            p[1:-1] = 0.5 * p[1:-1] + 0.25 * (p[:-2] + p[2:])
+        return p
+
     def runs_inside(ok):
         """Contiguous index runs where ok is True."""
         runs, start = [], None
@@ -461,7 +470,7 @@ def add_features(config, H, mask, meta, parent=None):
     n_pistes = 0
     for piste in feats["pistes"]:
         diff = piste["difficulty"] if piste["difficulty"] in PISTE_COLORS else "intermediate"
-        pts = densify(piste["points"], step=0.6)
+        pts = densify(smooth_polyline(piste["points"]), step=0.6)
         cols, rows = pts[:, 0], pts[:, 1]
         ok = inside(cols, rows)
         for a, b in runs_inside(ok):

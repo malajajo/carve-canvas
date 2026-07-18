@@ -34,6 +34,7 @@ outcrop_amount = 0.45  # 0 = pristine snow, 1 = heavily rock-strewn
 piste_radius = 0.014   # half-thickness of piste ribbons, Blender units
 lift_clearance = 0.05  # cable height above terrain, Blender units
 pylon_spacing_m = 350  # metres between lift pylons
+min_piste_len_m = 250  # drop connector stubs shorter than this (after chaining)
 
 [underside]
 # Floating-island underside: rings taper inward and converge to a low point
