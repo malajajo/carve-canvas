@@ -24,10 +24,13 @@ Each resort is defined by a small config in `resorts/<slug>.toml`
 # 5. Stream ESA WorldCover land-cover masks (forest/rock/glacier/built)
 .venv/bin/python pipeline/fetch_landcover.py resorts/val-disere.toml
 
-# 6. Stylise: de-noise, emphasise major forms, deepen valleys
+# 6. Project pistes + lifts onto the heightmap grid
+.venv/bin/python pipeline/make_features.py resorts/val-disere.toml
+
+# 7. Stylise: de-noise, emphasise major forms, deepen valleys
 .venv/bin/python pipeline/stylise.py resorts/val-disere.toml
 
-# 7. Build the floating terrain block in Blender, save .blend
+# 8. Build the floating terrain block in Blender, save .blend
 scripts/blender.sh --background --python blender/build_terrain.py -- resorts/val-disere.toml
 ```
 

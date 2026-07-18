@@ -358,6 +358,159 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
     obj.data.materials.append(mat)
 
 
+# European piste colour convention (linear RGB)
+PISTE_COLORS = {
+    "novice": (0.10, 0.55, 0.15, 1.0),
+    "easy": (0.08, 0.25, 0.75, 1.0),
+    "intermediate": (0.75, 0.06, 0.06, 1.0),
+    "advanced": (0.01, 0.01, 0.01, 1.0),
+    "expert": (0.01, 0.01, 0.01, 1.0),
+    "freeride": (0.90, 0.60, 0.05, 1.0),
+}
+STEEL = (0.06, 0.06, 0.07, 1.0)
+
+
+def add_features(config, H, mask, meta):
+    """Drape pistes as coloured ribbons and lifts as cables with pylons."""
+    data_dir = ROOT / "data" / config["slug"]
+    fpath = data_dir / "features.json"
+    if not fpath.exists():
+        print("no features.json — skipping pistes/lifts")
+        return
+    feats = json.loads(fpath.read_text())
+
+    t, f = config["terrain"], config["features"]
+    ny, nx = H.shape
+    extent_x, extent_y = meta["extent_m"]
+    scale = t["target_size"] / max(extent_x, extent_y)
+    dx = extent_x / (nx - 1) * scale
+    dy = extent_y / (ny - 1) * scale
+    Z = (H - H[mask].min()) * scale * t["z_exaggeration"]
+
+    def sample_z(cols, rows):
+        c = np.clip(cols, 0, nx - 1.001)
+        r = np.clip(rows, 0, ny - 1.001)
+        c0, r0 = np.floor(c).astype(int), np.floor(r).astype(int)
+        fc, fr = c - c0, r - r0
+        return (Z[r0, c0] * (1 - fc) * (1 - fr) + Z[r0, c0 + 1] * fc * (1 - fr)
+                + Z[r0 + 1, c0] * (1 - fc) * fr + Z[r0 + 1, c0 + 1] * fc * fr)
+
+    def to_scene_xy(cols, rows):
+        return (cols - (nx - 1) / 2) * dx, ((ny - 1) / 2 - rows) * dy
+
+    def inside(cols, rows):
+        c = np.round(cols).astype(int)
+        r = np.round(rows).astype(int)
+        ok = (c >= 0) & (c < nx) & (r >= 0) & (r < ny)
+        res = np.zeros(len(cols), dtype=bool)
+        res[ok] = mask[r[ok], c[ok]]
+        return res
+
+    def densify(pts, step):
+        pts = np.asarray(pts, dtype=np.float64)
+        out = [pts[0]]
+        for a, b in zip(pts[:-1], pts[1:]):
+            n = max(1, int(np.hypot(*(b - a)) / step))
+            for i in range(1, n + 1):
+                out.append(a + (b - a) * (i / n))
+        return np.array(out)
+
+    def runs_inside(ok):
+        """Contiguous index runs where ok is True."""
+        runs, start = [], None
+        for i, v in enumerate(ok):
+            if v and start is None:
+                start = i
+            elif not v and start is not None:
+                runs.append((start, i))
+                start = None
+        if start is not None:
+            runs.append((start, len(ok)))
+        return [r for r in runs if r[1] - r[0] >= 2]
+
+    def flat_material(name, color):
+        mat = bpy.data.materials.new(name)
+        bsdf = mat.node_tree.nodes["Principled BSDF"]
+        bsdf.inputs["Base Color"].default_value = color
+        bsdf.inputs["Roughness"].default_value = 0.6
+        return mat
+
+    def new_curve_obj(name, color, radius):
+        cd = bpy.data.curves.new(name, "CURVE")
+        cd.dimensions = "3D"
+        cd.bevel_depth = radius
+        cd.bevel_resolution = 2
+        cd.materials.append(flat_material(f"{name}_mat", color))
+        obj = bpy.data.objects.new(name, cd)
+        bpy.context.collection.objects.link(obj)
+        return cd
+
+    def add_spline(cd, x, y, z):
+        sp = cd.splines.new("POLY")
+        sp.points.add(len(x) - 1)
+        sp.points.foreach_set("co", np.column_stack([x, y, z, np.ones(len(x))]).ravel())
+
+    # --- Pistes: one curve object per difficulty, terrain-hugging ribbons ---
+    r_piste = f["piste_radius"]
+    by_difficulty = {}
+    n_pistes = 0
+    for piste in feats["pistes"]:
+        diff = piste["difficulty"] if piste["difficulty"] in PISTE_COLORS else "intermediate"
+        pts = densify(piste["points"], step=0.6)
+        cols, rows = pts[:, 0], pts[:, 1]
+        ok = inside(cols, rows)
+        for a, b in runs_inside(ok):
+            if diff not in by_difficulty:
+                by_difficulty[diff] = new_curve_obj(
+                    f"pistes_{diff}", PISTE_COLORS[diff], r_piste)
+            x, y = to_scene_xy(cols[a:b], rows[a:b])
+            z = sample_z(cols[a:b], rows[a:b]) + r_piste * 0.4
+            add_spline(by_difficulty[diff], x, y, z)
+            n_pistes += 1
+
+    # --- Lifts: draped cables + pylon prisms ---
+    clearance = f["lift_clearance"]
+    cable = new_curve_obj("lift_cables", STEEL, 0.004)
+    spacing_px = f["pylon_spacing_m"] / meta["pixel_size_m"][0]
+    py_verts, py_faces = [], []
+    w = 0.006  # pylon half-width
+    n_lifts = 0
+    for lift in feats["lifts"]:
+        pts = densify(lift["points"], step=1.5)
+        cols, rows = pts[:, 0], pts[:, 1]
+        ok = inside(cols, rows)
+        for a, b in runs_inside(ok):
+            x, y = to_scene_xy(cols[a:b], rows[a:b])
+            ground = sample_z(cols[a:b], rows[a:b])
+            add_spline(cable, x, y, ground + clearance)
+            n_lifts += 1
+            # pylons at regular arc-length intervals
+            seg = np.hypot(np.diff(cols[a:b]), np.diff(rows[a:b]))
+            arc = np.concatenate([[0], np.cumsum(seg)])
+            for d in np.arange(spacing_px / 2, arc[-1], spacing_px):
+                i = int(np.searchsorted(arc, d))
+                base = len(py_verts)
+                x0, y0 = x[i], y[i]
+                z0, z1 = ground[i] - 0.01, ground[i] + clearance
+                for zz in (z0, z1):
+                    py_verts += [(x0 - w, y0 - w, zz), (x0 + w, y0 - w, zz),
+                                 (x0 + w, y0 + w, zz), (x0 - w, y0 + w, zz)]
+                for k in range(4):
+                    k2 = (k + 1) % 4
+                    py_faces.append([base + k, base + k2, base + 4 + k2, base + 4 + k])
+
+    if py_verts:
+        pm = bpy.data.meshes.new("pylons")
+        pm.from_pydata(py_verts, [], py_faces)
+        pm.validate()
+        pm.materials.append(flat_material("pylon_mat", STEEL))
+        obj = bpy.data.objects.new("lift_pylons", pm)
+        bpy.context.collection.objects.link(obj)
+
+    print(f"features: {n_pistes} piste segments, {n_lifts} lift cables, "
+          f"{len(py_verts) // 8} pylons")
+
+
 def add_lighting_and_camera(obj):
     # Low-ish raking sun from the NW so relief reads clearly
     sun_data = bpy.data.lights.new("sun", type="SUN")
@@ -401,6 +554,7 @@ def main():
     t = config["terrain"]
     z_scale = t["target_size"] / max(meta["extent_m"]) * t["z_exaggeration"]
     add_material(obj, config, float(heightmap[mask].min()), z_scale, landcover)
+    add_features(config, heightmap, mask, meta)
     add_lighting_and_camera(obj)
 
     # Open in Material Preview so colours show immediately (Solid mode is

@@ -30,6 +30,11 @@ outcrop_slope_deg = 28 # rock patches start appearing above this slope
 outcrop_scale = 6.0    # patch size (higher = smaller, busier patches)
 outcrop_amount = 0.45  # 0 = pristine snow, 1 = heavily rock-strewn
 
+[features]
+piste_radius = 0.014   # half-thickness of piste ribbons, Blender units
+lift_clearance = 0.05  # cable height above terrain, Blender units
+pylon_spacing_m = 350  # metres between lift pylons
+
 [underside]
 # Floating-island underside: rings taper inward and converge to a low point
 depth_frac = 0.22      # island depth below lowest terrain, fraction of longest side
