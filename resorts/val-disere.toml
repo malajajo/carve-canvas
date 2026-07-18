@@ -1,0 +1,44 @@
+# Val d'Isère — resort definition for the Carve Canvas pipeline
+
+name = "Val d'Isère"
+slug = "val-disere"
+
+[bbox] # WGS84 degrees — covers the village + main ski area up to the Pissaillas glacier
+west = 6.93
+south = 45.38
+east = 7.08
+north = 45.48
+
+[terrain]
+heightmap_size = 512   # pixels on the longest side of the heightmap grid
+target_size = 10.0     # Blender units for the longest horizontal side of the diorama
+z_exaggeration = 1.6   # vertical exaggeration applied to relief
+
+[style]
+# Non-destructive stylisation of the raw DEM (pipeline/stylise.py)
+smooth_m = 35          # gaussian blur that removes small-scale DEM noise
+macro_m = 400          # length scale separating "major forms" from "detail"
+detail_gain = 0.8      # how much sub-macro detail survives (1.0 = all)
+valley_gamma = 1.2     # >1 deepens valleys and makes peaks stand proud
+
+[materials]
+treeline_m = 2150      # forest fades out above this real-world altitude
+treeline_blend_m = 150 # softness of the treeline transition
+rock_slope_deg = 45    # faces steeper than this shed their snow
+rock_blend_deg = 7     # softness of the snow->rock transition
+outcrop_slope_deg = 28 # rock patches start appearing above this slope
+outcrop_scale = 6.0    # patch size (higher = smaller, busier patches)
+outcrop_amount = 0.45  # 0 = pristine snow, 1 = heavily rock-strewn
+
+[underside]
+# Floating-island underside: rings taper inward and converge to a low point
+depth_frac = 0.22      # island depth below lowest terrain, fraction of longest side
+rings = 14             # vertical resolution of the taper
+taper = 0.85           # cos-profile exponent; lower = fuller belly, higher = sharper cone
+
+[boundary]
+# Boundary is auto-derived from OSM pistes + lifts:
+# union of geometries -> buffer -> smooth -> simplify
+buffer_m = 600         # how far beyond pistes/lifts the world extends
+smooth_m = 500         # closing radius, rounds off the outline
+simplify_m = 120       # polygon simplification tolerance
