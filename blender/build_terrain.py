@@ -385,6 +385,138 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
     obj.data.materials.append(mat)
 
 
+PINE = (0.045, 0.12, 0.06, 1.0)
+PINE_SNOWY = (0.55, 0.62, 0.58, 1.0)
+TRUNK = (0.10, 0.06, 0.035, 1.0)
+
+
+def pine_template():
+    """Unit-height low-poly pine: 4-sided trunk + three 7-sided cones.
+    Returns (verts, faces, face_material_index) with materials
+    0=foliage 1=trunk."""
+    verts, faces, mats = [], [], []
+
+    def ring(radius, z, n):
+        start = len(verts)
+        for i in range(n):
+            a = 2 * np.pi * i / n
+            verts.append((radius * np.cos(a), radius * np.sin(a), z))
+        return start
+
+    # trunk
+    b0 = ring(0.05, 0.0, 4)
+    b1 = ring(0.04, 0.22, 4)
+    for i in range(4):
+        j = (i + 1) % 4
+        faces.append([b0 + i, b0 + j, b1 + j, b1 + i])
+        mats.append(1)
+    # three stacked cones
+    for r, z0, z1 in ((0.30, 0.12, 0.55), (0.22, 0.38, 0.78), (0.14, 0.62, 1.0)):
+        base = ring(r, z0, 7)
+        apex = len(verts)
+        verts.append((0.0, 0.0, z1))
+        for i in range(7):
+            j = (i + 1) % 7
+            faces.append([base + i, base + j, apex])
+            mats.append(0)
+        # underside of the cone skirt
+        faces.append([base + i for i in range(6, -1, -1)])
+        mats.append(0)
+    return np.array(verts), faces, mats
+
+
+def add_trees(config, H, mask, landcover, meta, parent):
+    """Scatter stylised pines using the real forest mask, avoiding pistes."""
+    if landcover is None or "trees" not in config:
+        return
+    tcfg = config["trees"]
+    t = config["terrain"]
+    ny, nx = H.shape
+    extent_x, extent_y = meta["extent_m"]
+    scale = t["target_size"] / max(extent_x, extent_y)
+    dx = extent_x / (nx - 1) * scale
+    dy = extent_y / (ny - 1) * scale
+    Z = (H - H[mask].min()) * scale * t["z_exaggeration"]
+
+    forest = landcover["forest"] * mask
+    # Keep-out: no trees on pistes (features grid coords) or buildings
+    keep_out = landcover["built"] > 0.15
+    fpath = ROOT / "data" / config["slug"] / "features.json"
+    if fpath.exists():
+        feats = json.loads(fpath.read_text())
+        for piste in feats["pistes"]:
+            pts = np.asarray(piste["points"])
+            seg = np.hypot(*np.diff(pts, axis=0).T)
+            n = np.maximum(1, (seg / 0.7).astype(int))
+            for (a, b), steps in zip(zip(pts[:-1], pts[1:]), n):
+                for s in range(steps + 1):
+                    c, r = a + (b - a) * (s / steps)
+                    ci, ri = int(round(c)), int(round(r))
+                    keep_out[max(ri - 1, 0):ri + 2, max(ci - 1, 0):ci + 2] = True
+
+    rng = np.random.default_rng(42)
+    p = np.clip(forest * tcfg["density"], 0, 1)
+    p[keep_out] = 0
+    rows, cols = np.nonzero(rng.random(p.shape) < p)
+    if len(rows) == 0:
+        print("trees: no forest cells inside boundary")
+        return
+
+    jit = rng.random((len(rows), 2))
+    tcols = cols + jit[:, 0]
+    trows = rows + jit[:, 1]
+    x = (tcols - (nx - 1) / 2) * dx
+    y = ((ny - 1) / 2 - trows) * dy
+    c0 = np.clip(tcols, 0, nx - 1.001).astype(int)
+    r0 = np.clip(trows, 0, ny - 1.001).astype(int)
+    fc, fr = tcols - c0, trows - r0
+    z = (Z[r0, c0] * (1 - fc) * (1 - fr) + Z[r0, c0 + 1] * fc * (1 - fr)
+         + Z[r0 + 1, c0] * (1 - fc) * fr + Z[r0 + 1, c0 + 1] * fc * fr)
+
+    tv, tf, tm = pine_template()
+    h = tcfg["height_m"] * scale * t["z_exaggeration"]
+    heights = h * rng.uniform(0.7, 1.35, len(rows))
+    angles = rng.uniform(0, 2 * np.pi, len(rows))
+    snowy = rng.random(len(rows)) < tcfg["snowy_share"]
+
+    all_verts = np.empty((len(rows), len(tv), 3))
+    cosa, sina = np.cos(angles), np.sin(angles)
+    vx, vy, vz = tv[:, 0], tv[:, 1], tv[:, 2]
+    all_verts[..., 0] = (vx[None, :] * cosa[:, None] - vy[None, :] * sina[:, None]) * heights[:, None] + x[:, None]
+    all_verts[..., 1] = (vx[None, :] * sina[:, None] + vy[None, :] * cosa[:, None]) * heights[:, None] + y[:, None]
+    all_verts[..., 2] = vz[None, :] * heights[:, None] + (z - 0.15 * heights)[:, None]
+
+    nv = len(tv)
+    all_faces, all_mats = [], []
+    for i in range(len(rows)):
+        off = i * nv
+        for f, m in zip(tf, tm):
+            all_faces.append([v + off for v in f])
+            # snowy trees use material 2 for foliage
+            all_mats.append(2 if (snowy[i] and m == 0) else m)
+
+    mesh = bpy.data.meshes.new("trees")
+    mesh.from_pydata(all_verts.reshape(-1, 3).tolist(), [], all_faces)
+    mesh.validate()
+
+    def flat(name, color, rough=0.7):
+        mat = bpy.data.materials.new(name)
+        bsdf = mat.node_tree.nodes["Principled BSDF"]
+        bsdf.inputs["Base Color"].default_value = color
+        bsdf.inputs["Roughness"].default_value = rough
+        return mat
+
+    mesh.materials.append(flat("pine", PINE))
+    mesh.materials.append(flat("trunk", TRUNK))
+    mesh.materials.append(flat("pine_snowy", PINE_SNOWY))
+    mesh.polygons.foreach_set("material_index", all_mats)
+
+    obj = bpy.data.objects.new("trees", mesh)
+    obj.parent = parent
+    bpy.context.collection.objects.link(obj)
+    print(f"trees: {len(rows)} pines placed ({int(snowy.sum())} snowy)")
+
+
 # European piste colour convention (linear RGB)
 PISTE_COLORS = {
     "novice": (0.10, 0.55, 0.15, 1.0),
@@ -605,6 +737,7 @@ def main():
     z_scale = t["target_size"] / max(meta["extent_m"]) * t["z_exaggeration"]
     add_material(obj, config, float(heightmap[mask].min()), z_scale, landcover)
     add_features(config, heightmap, mask, meta, parent=obj)
+    add_trees(config, heightmap, mask, landcover, meta, parent=obj)
     add_lighting_and_camera(obj)
 
     # Open in Material Preview so colours show immediately (Solid mode is

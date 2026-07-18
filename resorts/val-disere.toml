@@ -36,6 +36,11 @@ lift_clearance = 0.05  # cable height above terrain, Blender units
 pylon_spacing_m = 350  # metres between lift pylons
 min_piste_len_m = 250  # drop connector stubs shorter than this (after chaining)
 
+[trees]
+density = 0.8         # probability scale: forest fraction -> tree per cell
+height_m = 48          # stylised tree height in real-world metres (~2x reality)
+snowy_share = 0.35     # fraction of pines rendered snow-dusted
+
 [underside]
 # Floating-island underside: rings taper inward and converge to a low point
 depth_frac = 0.22      # island depth below lowest terrain, fraction of longest side
