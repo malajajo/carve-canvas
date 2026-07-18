@@ -48,3 +48,27 @@ Append-only. Newest at the bottom. Keep entries short.
 - **Lesson**: physically-correct sky needs exposure management — always
   re-check exposure after lighting changes, and A/B test sun azimuth
   with cheap 16-sample renders instead of guessing.
+
+## 2026-07-18 — Autonomous session (populate + repeatability)
+
+- **Chamonix proves repeatability**: zero pipeline changes needed for
+  resort #2. Only fix: Overpass mirror fallback (overpass-api.de 504s
+  routinely; kumi.systems + private.coffee as backups, retry loop).
+- **Trees**: pine_template() = 4-sided trunk + 3 stacked 7-sided cones,
+  ~2x real scale (48m knob), placed per-cell by forest fraction
+  (density 0.8), pistes+buildings keep-out, 35% snow-dusted, single
+  merged mesh. VDI 2.9k trees, Chamonix 9.2k.
+- **Chalets**: gabled template, built-fraction sampling (extra building
+  in dense cells), snow roofs + timber walls, base sunk 25% into slope.
+  ~2.5k buildings reads as believable town fabric at near-real scale.
+- **Chairs**: 8-vert prisms hung every 130m along cables. Merged mesh.
+- **All object generators follow the same pattern**: numpy template ×
+  instance transforms → single mesh → 1-2 flat materials → parent to
+  terrain. Fast to build, fast to render, easy to restyle.
+- **Showcase renders** in docs/ (val-disere.png, chamonix.png,
+  val-disere-village.png), embedded in README.
+- **Known gaps / next ideas**: piste ribbons could gap where they cross
+  village (currently overlap roofs slightly); nursery-slope area
+  patches; clouds below island; ridge pointiness rock; lift stations at
+  cable ends; night/dusk lighting variant; Whistler or a Norwegian
+  resort as non-Alps test (W-longitude tile naming untested).

@@ -3,6 +3,15 @@
 Turns real-world ski resorts into stylised floating 3D dioramas.
 See `Project_Vision_Stylised_Ski_Resorts.md` for the vision.
 
+| Val d'Isère | Chamonix |
+|---|---|
+| ![Val d'Isère](docs/val-disere.png) | ![Chamonix](docs/chamonix.png) |
+
+Everything is generated from open data: Copernicus DEM terrain,
+OpenStreetMap pistes/lifts (real difficulty colours), ESA WorldCover
+forests/rock/glaciers/villages — then stylised into a floating island
+with a snow lip, scattered pines, chalets and chairlifts.
+
 ## Pipeline
 
 Each resort is defined by a small config in `resorts/<slug>.toml`
