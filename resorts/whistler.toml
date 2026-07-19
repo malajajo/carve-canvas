@@ -10,16 +10,16 @@ east = -122.82
 north = 50.14
 
 [terrain]
-heightmap_size = 512
+heightmap_size = 320
 target_size = 10.0
 z_exaggeration = 3.2
 camera_distance = 1.6
 
 [style]
-smooth_m = 35
-macro_m = 400
-detail_gain = 0.8
-valley_gamma = 1.2
+smooth_m = 120
+macro_m = 900
+detail_gain = 0.55
+valley_gamma = 1.25
 
 [boundary]
 buffer_m = 600
@@ -33,22 +33,22 @@ rock_slope_deg = 62
 rock_blend_deg = 6
 outcrop_slope_deg = 46
 outcrop_scale = 6.0
-outcrop_amount = 0.45
+outcrop_amount = 0.3
 
 [features]
-piste_radius = 0.014
+piste_radius = 0.022
 lift_clearance = 0.05
 pylon_spacing_m = 350
 min_piste_len_m = 250
 
 [trees]
-density = 0.8
-height_m = 48
+density = 1.0
+height_m = 70
 snowy_share = 0.35
 
 [underside]
 depth_frac = 0.15
 rings = 14
 taper = 0.85
-lip_bulge = 0.045
-lip_rings = 3
+lip_bulge = 0.08
+lip_rings = 4

@@ -258,6 +258,9 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
     bsdf = nt.nodes["Principled BSDF"]
     bsdf.inputs["Roughness"].default_value = 0.95
     bsdf.inputs["Specular IOR Level"].default_value = 0.1  # matte snow, no chrome sheen
+    bsdf.inputs["Subsurface Weight"].default_value = 0.3   # waxy snow glow
+    bsdf.inputs["Subsurface Radius"].default_value = (0.10, 0.13, 0.18)
+    bsdf.inputs["Subsurface Scale"].default_value = 0.05
 
     def node(kind, **props):
         n = nt.nodes.new(kind)
@@ -396,7 +399,19 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
     nt.links.new(mix_forest.outputs[2], mix_rock.inputs[6])
     nt.links.new(rockiness, mix_rock.inputs["Factor"])
 
-    nt.links.new(mix_rock.outputs[2], bsdf.inputs["Base Color"])
+    # Soft blue shading in crevices (ambient-occlusion multiply) gives the
+    # marshmallow form-definition the flat sun cannot
+    ao = node("ShaderNodeAmbientOcclusion")
+    ao.inputs["Distance"].default_value = 0.35
+    shade = node("ShaderNodeMix", data_type="RGBA", blend_type="MULTIPLY")
+    shade.inputs["Factor"].default_value = 1.0
+    shade.inputs[7].default_value = (0.62, 0.68, 0.85, 1.0)  # blue crevice tint
+    nt.links.new(mix_rock.outputs[2], shade.inputs[6])
+    final = node("ShaderNodeMix", data_type="RGBA")
+    nt.links.new(ao.outputs["AO"], final.inputs["Factor"])
+    nt.links.new(shade.outputs[2], final.inputs[6])   # occluded -> shaded
+    nt.links.new(mix_rock.outputs[2], final.inputs[7])  # open -> full colour
+    nt.links.new(final.outputs[2], bsdf.inputs["Base Color"])
     obj.data.materials.append(mat)
 
 
@@ -579,7 +594,7 @@ def add_chalets(config, H, mask, landcover, meta, parent):
     hf = [([0, 1, 5, 4], 0), ([1, 2, 6, 5], 0), ([2, 3, 7, 6], 0), ([3, 0, 4, 7], 0),
           ([4, 5, 9, 8], 1), ([6, 7, 8, 9], 1), ([5, 6, 9], 0), ([7, 4, 8], 0)]
 
-    base_w = 18 * scale  # ~18m footprint, stylised
+    base_w = 30 * scale  # ~18m footprint, stylised
     sizes = base_w * rng.uniform(0.7, 1.9, len(rows))
     heights = sizes * rng.uniform(0.55, 0.75, len(rows))
     angles = rng.uniform(0, 2 * np.pi, len(rows))
@@ -618,13 +633,15 @@ def add_chalets(config, H, mask, landcover, meta, parent):
 
 
 # European piste colour convention (linear RGB)
+# Pastel snow-tints: groomed runs read as white swaths with a hint of
+# difficulty colour, not GIS overlay lines
 PISTE_COLORS = {
-    "novice": (0.10, 0.55, 0.15, 1.0),
-    "easy": (0.08, 0.25, 0.75, 1.0),
-    "intermediate": (0.75, 0.06, 0.06, 1.0),
-    "advanced": (0.01, 0.01, 0.01, 1.0),
-    "expert": (0.01, 0.01, 0.01, 1.0),
-    "freeride": (0.90, 0.60, 0.05, 1.0),
+    "novice": (0.72, 0.88, 0.76, 1.0),
+    "easy": (0.68, 0.80, 0.96, 1.0),
+    "intermediate": (0.95, 0.72, 0.70, 1.0),
+    "advanced": (0.55, 0.56, 0.62, 1.0),
+    "expert": (0.55, 0.56, 0.62, 1.0),
+    "freeride": (0.95, 0.85, 0.62, 1.0),
 }
 STEEL = (0.06, 0.06, 0.07, 1.0)
 
@@ -743,10 +760,10 @@ def add_features(config, H, mask, meta, parent=None):
 
     # --- Lifts: draped cables + pylon prisms ---
     clearance = f["lift_clearance"]
-    cable = new_curve_obj("lift_cables", STEEL, 0.004)
+    cable = new_curve_obj("lift_cables", STEEL, 0.006)
     spacing_px = f["pylon_spacing_m"] / meta["pixel_size_m"][0]
     py_verts, py_faces = [], []
-    w = 0.006  # pylon half-width
+    w = 0.009  # pylon half-width
 
     def add_box(x0, y0, z0, z1, hw):
         base = len(py_verts)
@@ -760,7 +777,7 @@ def add_features(config, H, mask, meta, parent=None):
     n_lifts = 0
     ch_verts, ch_faces = [], []
     chair_spacing = 130 / meta["pixel_size_m"][0]  # a chair every ~130m
-    cw = 0.004  # chair half-size
+    cw = 0.006  # chair half-size
 
     def add_chair(x0, y0, ztop):
         base = len(ch_verts)
@@ -856,6 +873,7 @@ def add_lighting_and_camera(obj, cam_dist=1.15):
     vs.view_transform = "Standard"
     vs.exposure = -0.8
 
+
     # Frame the camera on the object's bounding box from a 3/4 angle
     bb = np.array(obj.bound_box)
     center = bb.mean(axis=0)
@@ -866,10 +884,13 @@ def add_lighting_and_camera(obj, cam_dist=1.15):
     bpy.context.collection.objects.link(target)
 
     cam_data = bpy.data.cameras.new("camera")
+    cam_data.dof.use_dof = True            # tilt-shift miniature feel
+    cam_data.dof.aperture_fstop = 1.6
     cam = bpy.data.objects.new("Camera", cam_data)
     cam.location = (center[0] + d * 0.78, center[1] - d * 0.78, center[2] + d * 0.62)
     track = cam.constraints.new("TRACK_TO")
     track.target = target
+    cam_data.dof.focus_object = target
     bpy.context.collection.objects.link(cam)
     bpy.context.scene.camera = cam
 

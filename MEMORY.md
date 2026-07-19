@@ -109,3 +109,31 @@ Process lesson: I judged "looks good" from too few angles and accepted
 muted colour because each step was a small improvement on the last.
 Compare against docs/style-reference.png directly, not against the
 previous render.
+
+## 2026-07-19 — The charm pass ("still scientific and dull" verdict)
+
+Exaggeration alone didn't create charm. The five structural moves that
+finally did (apply together — none works alone):
+
+1. **Sculpt, don't sample**: heightmap 320px + smooth_m 120 +
+   macro_m 900 + detail_gain 0.55 → ~soft clay landforms instead of
+   200k DEM facets. This killed "scientific" more than anything.
+2. **Snow that glows**: Subsurface Weight 0.3 (radius .10/.13/.18,
+   scale .05) + AO node (dist 0.35) multiplying a blue crevice tint
+   (0.62,0.68,0.85). Marshmallow form-definition.
+3. **Pistes = pastel snow-tints** (e.g. easy (0.68,0.80,0.96)), wide
+   ribbons (0.022) — engraved groomed runs, not GIS spaghetti.
+4. **Chunky props**: trees 70m/density 1.0, chalets 30m, thick
+   cables/pylons/chairs.
+5. **Miniature camera**: DOF fstop 1.6 focused on centre + above-rim
+   angle. Instant diorama feel.
+
+Blender 5.x gotchas hit: Scene.node_tree gone (compositing_node_group
++ interface sockets), Glare options moved into input sockets ("Type"
+= "Bloom"), GPU compositor crashes headless (set
+render.compositor_device="CPU") and even then produced blank output —
+bloom shelved for now (do it in post or EEVEE later).
+
+Trade-off accepted: geographic micro-detail sacrificed for charm.
+The [style] knobs can walk it back per-resort if a peak loses its
+identity. Verify silhouettes of famous peaks still read.
