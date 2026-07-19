@@ -284,7 +284,89 @@ ROCK = (0.16, 0.14, 0.13, 1.0)
 GLACIER = (0.62, 0.74, 0.88, 1.0)
 
 
-def add_material(obj, config, elev0_m, z_scale, landcover=None):
+def design_sun(village):
+    """Warm key light over the camera's shoulder. Returns (euler, photon_dir)."""
+    rx = 1.15
+    if village is not None:
+        vx, vy, _ = village
+        vdir = np.array([vx, vy])
+        vdir = vdir / (np.linalg.norm(vdir) + 1e-9)
+        ang = 0.61
+        ca, sa = np.cos(ang), np.sin(ang)
+        lx = vdir[0] * ca - vdir[1] * sa
+        ly = vdir[0] * sa + vdir[1] * ca
+        rz = float(np.arctan2(lx, -ly))
+    else:
+        rz = 0.785
+    d = (-np.sin(rz) * np.sin(rx), np.cos(rz) * np.sin(rx), -np.cos(rx))
+    return (rx, 0.0, rz), d
+
+
+def light_ramp_nodes(nt, node, sun_dir, stops):
+    """dot(N, -sun) -> designed colour ramp: the core of the NPR look."""
+    geo = node("ShaderNodeNewGeometry")
+    dot = node("ShaderNodeVectorMath", operation="DOT_PRODUCT")
+    dot.inputs[1].default_value = tuple(-c for c in sun_dir)
+    nt.links.new(geo.outputs["Normal"], dot.inputs[0])
+    t = node("ShaderNodeMapRange")
+    t.inputs["From Min"].default_value = -1.0
+    t.inputs["From Max"].default_value = 1.0
+    nt.links.new(dot.outputs["Value"], t.inputs["Value"])
+    ramp = node("ShaderNodeValToRGB")
+    elems = ramp.color_ramp.elements
+    while len(elems) < len(stops):
+        elems.new(0.5)
+    for el, (pos, col) in zip(elems, stops):
+        el.position = pos
+        el.color = col
+    nt.links.new(t.outputs["Result"], ramp.inputs["Fac"])
+    return ramp.outputs["Color"]
+
+
+SNOW_STOPS = [(0.35, (0.42, 0.54, 0.90, 1.0)),   # shadow: deep soft blue
+              (0.62, (0.82, 0.88, 1.00, 1.0)),   # mid: pale blue-white
+              (0.85, (1.00, 0.98, 0.92, 1.0))]   # lit: warm cream
+ROCK_STOPS = [(0.30, (0.24, 0.22, 0.30, 1.0)),
+              (0.60, (0.46, 0.40, 0.35, 1.0)),
+              (0.85, (0.66, 0.57, 0.46, 1.0))]
+ASSET_STOPS = [(0.30, (0.62, 0.68, 0.95, 1.0)),
+               (0.60, (0.95, 0.95, 0.97, 1.0)),
+               (0.85, (1.08, 1.04, 0.96, 1.0))]
+
+
+def ramp_kit_materials(sun_dir):
+    """Fold imported asset materials into the same designed light language."""
+    for mat in bpy.data.materials:
+        if not (mat.name.startswith("colormap") or mat.name == "chalet_wood"):
+            continue
+        nt = mat.node_tree
+
+        def node(kind, **props):
+            n = nt.nodes.new(kind)
+            for k, v in props.items():
+                setattr(n, k, v)
+            return n
+
+        bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if bsdf is None or not bsdf.inputs["Base Color"].links:
+            continue
+        src_socket = bsdf.inputs["Base Color"].links[0].from_socket
+        lr = light_ramp_nodes(nt, node, sun_dir, ASSET_STOPS)
+        mult = node("ShaderNodeMix", data_type="RGBA", blend_type="MULTIPLY")
+        mult.inputs["Factor"].default_value = 1.0
+        nt.links.new(src_socket, mult.inputs[6])
+        nt.links.new(lr, mult.inputs[7])
+        nt.links.new(mult.outputs[2], bsdf.inputs["Base Color"])
+        bsdf.inputs["Roughness"].default_value = 1.0
+        bsdf.inputs["Emission Color"].default_value = (1, 1, 1, 1)
+        if not bsdf.inputs["Emission Strength"].links:
+            bsdf.inputs["Emission Strength"].default_value = 0.0
+        # fake bounce: slight self-lift so shadows never go dead
+        nt.links.new(mult.outputs[2], bsdf.inputs["Emission Color"])
+        bsdf.inputs["Emission Strength"].default_value = 0.25
+
+
+def add_material(obj, config, elev0_m, z_scale, landcover=None, sun_dir=(0.5, 0.5, -0.7)):
     """Zone shader. With landcover masks: real forest/rock/glacier placement,
     noise only roughens edges. Without: procedural altitude/slope fallback.
 
@@ -298,9 +380,9 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
     mat = bpy.data.materials.new("terrain_zones")
     nt = mat.node_tree
     bsdf = nt.nodes["Principled BSDF"]
-    bsdf.inputs["Roughness"].default_value = 0.95
-    bsdf.inputs["Specular IOR Level"].default_value = 0.1  # matte snow, no chrome sheen
-    bsdf.inputs["Subsurface Weight"].default_value = 0.3   # waxy snow glow
+    bsdf.inputs["Roughness"].default_value = 1.0
+    bsdf.inputs["Specular IOR Level"].default_value = 0.05
+    bsdf.inputs["Subsurface Weight"].default_value = 0.12
     bsdf.inputs["Subsurface Radius"].default_value = (0.10, 0.13, 0.18)
     bsdf.inputs["Subsurface Scale"].default_value = 0.05
 
@@ -354,6 +436,9 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
         nt.links.new(sock, add.inputs[0])
         nt.links.new(edge.outputs[0], add.inputs[1])
         return add.outputs[0]
+
+    snow_col = light_ramp_nodes(nt, node, sun_dir, SNOW_STOPS)
+    rock_col = light_ramp_nodes(nt, node, sun_dir, ROCK_STOPS)
 
     glacier_fac = None
     if landcover is not None:
@@ -423,25 +508,22 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
     nt.links.new(lip_scaled.outputs[0], lip_sub.inputs[1])
     rockiness = lip_sub.outputs[0]
 
-    # snow (glacier-tinted where applicable) -> forest -> rock
-    base = SNOW
+    # snow ramp (glacier-tinted where applicable) -> forest -> rock ramp
+    base = snow_col
     if glacier_fac is not None:
         mix_glacier = node("ShaderNodeMix", data_type="RGBA")
-        mix_glacier.inputs[6].default_value = SNOW     # A
-        mix_glacier.inputs[7].default_value = GLACIER  # B
+        nt.links.new(snow_col, mix_glacier.inputs[6])   # A
+        mix_glacier.inputs[7].default_value = GLACIER   # B
         nt.links.new(glacier_fac, mix_glacier.inputs["Factor"])
         base = mix_glacier.outputs[2]
 
     mix_forest = node("ShaderNodeMix", data_type="RGBA")
-    if isinstance(base, tuple):
-        mix_forest.inputs[6].default_value = base
-    else:
-        nt.links.new(base, mix_forest.inputs[6])
+    nt.links.new(base, mix_forest.inputs[6])
     mix_forest.inputs[7].default_value = FOREST  # B
     nt.links.new(forest_fac, mix_forest.inputs["Factor"])
 
     mix_rock = node("ShaderNodeMix", data_type="RGBA")
-    mix_rock.inputs[7].default_value = ROCK  # B
+    nt.links.new(rock_col, mix_rock.inputs[7])  # B: designed rock ramp
     nt.links.new(mix_forest.outputs[2], mix_rock.inputs[6])
     nt.links.new(rockiness, mix_rock.inputs["Factor"])
 
@@ -451,7 +533,7 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
     groom_f.inputs[1].default_value = 0.8
     nt.links.new(groom_attr.outputs["Fac"], groom_f.inputs[0])
     mix_groom = node("ShaderNodeMix", data_type="RGBA")
-    mix_groom.inputs[7].default_value = (0.93, 0.95, 1.0, 1.0)
+    mix_groom.inputs[7].default_value = (0.72, 0.82, 0.97, 1.0)  # cool groomed tracks
     nt.links.new(mix_rock.outputs[2], mix_groom.inputs[6])
     nt.links.new(groom_f.outputs[0], mix_groom.inputs["Factor"])
 
@@ -484,6 +566,9 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
     nt.links.new(fine.outputs["Fac"], bump2.inputs["Height"])
     nt.links.new(bump1.outputs["Normal"], bump2.inputs["Normal"])
     nt.links.new(bump2.outputs["Normal"], bsdf.inputs["Normal"])
+    # fake bounce: designed colour glows softly so shadows never go dead
+    nt.links.new(final.outputs[2], bsdf.inputs["Emission Color"])
+    bsdf.inputs["Emission Strength"].default_value = 0.22
     obj.data.materials.append(mat)
 
 
@@ -594,7 +679,7 @@ def add_trees(config, H, mask, landcover, groom, meta, assets, parent):
         snowy = rng.random() < tcfg["snowy_share"]
         asset = variants[int(rng.integers(len(variants)))] if (snowy or plain is None) else plain
         s = h_units * rng.uniform(0.55, 1.5) / asset.dimensions.z
-        canopy_r = 0.2 * asset.dimensions.x * s
+        canopy_r = 0.26 * asset.dimensions.x * s
         if not placer.try_place(x[i], y[i], canopy_r):
             continue
         sz = s * rng.uniform(0.85, 1.3)  # height jitter independent of girth
@@ -643,7 +728,7 @@ def add_chalets(config, H, mask, landcover, meta, assets, parent):
     n_placed = 0
     for i in range(len(rows)):
         s = size_units * rng.uniform(0.75, 1.8)
-        if not placer.try_place(x[i], y[i], 0.62 * s):
+        if not placer.try_place(x[i], y[i], 0.75 * s):
             continue
         rot = contour + rng.uniform(-0.3, 0.3) + (np.pi / 2 if rng.random() < 0.25 else 0)
         base_z = z[i] - 0.12 * s
@@ -675,7 +760,7 @@ def add_props(config, H, mask, landcover, meta, assets, parent):
     for i in range(len(rows)):
         asset, h_m = kinds[int(rng.integers(len(kinds)))]
         s = h_m * scale * zx / asset.dimensions.z
-        if not placer.try_place(x[i], y[i], 0.4 * asset.dimensions.x * s):
+        if not placer.try_place(x[i], y[i], 0.5 * asset.dimensions.x * s):
             continue
         place(asset, (x[i], y[i], z[i] - 0.05 * s), rng.uniform(0, 6.283), s, parent)
         n += 1
@@ -883,7 +968,7 @@ def add_features(config, H, mask, meta, parent=None):
           f"{len(py_verts) // 8} pylons, {len(ch_verts) // 8} chairs")
 
 
-def add_lighting_and_camera(obj, cam_dist=1.15, village=None, target_size=10.0):
+def add_lighting_and_camera(obj, cam_dist=1.15, village=None, target_size=10.0, sun_euler=(1.15, 0.0, 0.785)):
     from math import radians
 
     # Art-directed sky: saturated blue gradient backdrop (physical Nishita
@@ -900,30 +985,31 @@ def add_lighting_and_camera(obj, cam_dist=1.15, village=None, target_size=10.0):
     mr.inputs["From Max"].default_value = 0.65
     nt.links.new(sep.outputs["Z"], mr.inputs["Value"])
     ramp = nt.nodes.new("ShaderNodeValToRGB")
-    ramp.color_ramp.elements[0].color = (0.45, 0.68, 0.95, 1.0)  # pale horizon
-    ramp.color_ramp.elements[1].color = (0.045, 0.22, 0.65, 1.0) # deep zenith blue
+    ramp.color_ramp.elements[0].color = (0.55, 0.75, 0.98, 1.0)  # pale warm horizon
+    ramp.color_ramp.elements[1].color = (0.10, 0.32, 0.78, 1.0)  # saturated zenith
     nt.links.new(mr.outputs["Result"], ramp.inputs["Fac"])
-    nt.links.new(ramp.outputs["Color"], bg.inputs["Color"])
-    bg.inputs["Strength"].default_value = 1.3
+    # camera rays see the pretty gradient; diffuse rays see a soft cool fill
+    lp = nt.nodes.new("ShaderNodeLightPath")
+    fill = nt.nodes.new("ShaderNodeRGB")
+    fill.outputs[0].default_value = (0.80, 0.85, 0.97, 1.0)
+    mix = nt.nodes.new("ShaderNodeMix")
+    mix.data_type = "RGBA"
+    nt.links.new(lp.outputs["Is Camera Ray"], mix.inputs["Factor"])
+    nt.links.new(fill.outputs[0], mix.inputs[6])
+    nt.links.new(ramp.outputs["Color"], mix.inputs[7])
+    nt.links.new(mix.outputs[2], bg.inputs["Color"])
+    bg.inputs["Strength"].default_value = 0.75
     bpy.context.scene.world = world
 
     # Warm golden sun, raking angle proven by earlier A/B tests
+    # Soft warm sun: real cast shadows for depth, but the ramps carry the
+    # tonal design — the lamp is support, not the star
     sun_data = bpy.data.lights.new("sun", type="SUN")
-    sun_data.energy = 4.5
-    sun_data.color = (1.0, 0.86, 0.62)
-    sun_data.angle = 0.05
+    sun_data.energy = 2.4
+    sun_data.color = (1.0, 0.88, 0.70)
+    sun_data.angle = 0.15
     sun = bpy.data.objects.new("Sun", sun_data)
-    if village is not None:
-        vx, vy, _ = village
-        vdir = np.array([vx, vy])
-        vdir = vdir / (np.linalg.norm(vdir) + 1e-9)
-        ang = 0.61  # ~35 deg over the camera's left shoulder
-        ca, sa = np.cos(ang), np.sin(ang)
-        lx = vdir[0] * ca - vdir[1] * sa
-        ly = vdir[0] * sa + vdir[1] * ca
-        sun.rotation_euler = (1.15, 0.0, float(np.arctan2(lx, -ly)))
-    else:
-        sun.rotation_euler = (1.15, 0.0, 0.785)
+    sun.rotation_euler = sun_euler
     bpy.context.collection.objects.link(sun)
 
     # Standard transform keeps the saturated postcard colours (AgX greyed
@@ -977,7 +1063,22 @@ def main():
 
     t = config["terrain"]
     z_scale = t["target_size"] / max(meta["extent_m"]) * t["z_exaggeration"]
-    add_material(obj, config, float(heightmap[mask].min()), z_scale, landcover)
+
+    # Village anchor first: composition AND light design both hang off it
+    village = None
+    if landcover is not None and (landcover["built"] * mask).sum() > 0:
+        b = landcover["built"] * mask
+        ny, nx = heightmap.shape
+        cy = float((b * np.arange(ny)[:, None]).sum() / b.sum())
+        cx = float((b * np.arange(nx)[None, :]).sum() / b.sum())
+        scl = t["target_size"] / max(meta["extent_m"])
+        dxx = meta["extent_m"][0] / (nx - 1) * scl
+        dyy = meta["extent_m"][1] / (ny - 1) * scl
+        vz = (heightmap[int(cy), int(cx)] - heightmap[mask].min()) * scl * t["z_exaggeration"]
+        village = ((cx - (nx - 1) / 2) * dxx, ((ny - 1) / 2 - cy) * dyy, vz)
+    sun_euler, sun_dir = design_sun(village)
+
+    add_material(obj, config, float(heightmap[mask].min()), z_scale, landcover, sun_dir)
     add_features(config, heightmap, mask, meta, parent=obj)
 
     assets = load_assets(["tree-snow-a", "tree-snow-b", "tree-snow-c", "tree",
@@ -994,21 +1095,10 @@ def main():
     for mat in bpy.data.materials:
         if mat.name == "chalet_wood":
             add_variation_nodes(mat, hue_amount=0.04, val_amount=0.5)
+    ramp_kit_materials(sun_dir)
 
-    # Village anchor (scene coords) for postcard composition
-    village = None
-    if landcover is not None and (landcover["built"] * mask).sum() > 0:
-        b = landcover["built"] * mask
-        ny, nx = heightmap.shape
-        cy = float((b * np.arange(ny)[:, None]).sum() / b.sum())
-        cx = float((b * np.arange(nx)[None, :]).sum() / b.sum())
-        scale = t["target_size"] / max(meta["extent_m"])
-        dx = meta["extent_m"][0] / (nx - 1) * scale
-        dy = meta["extent_m"][1] / (ny - 1) * scale
-        vz = (heightmap[int(cy), int(cx)] - heightmap[mask].min()) * scale * t["z_exaggeration"]
-        village = ((cx - (nx - 1) / 2) * dx, ((ny - 1) / 2 - cy) * dy, vz)
     add_lighting_and_camera(obj, config["terrain"].get("camera_distance", 1.15),
-                            village, t["target_size"])
+                            village, t["target_size"], sun_euler)
 
     # Open looking through the composed camera, in Material Preview with
     # OUR sun and sky (not Blender's default studio HDRI) — so what the

@@ -201,3 +201,32 @@ Remaining gaps vs reference (next session): warmer golden light;
 clouds around island + sky; thicker cornice drips on the lip; village
 readability (fewer, larger, better-arranged buildings + window glow);
 tree colour variety; foreground props scale.
+
+## 2026-07-19 — The designed-light pivot (NPR shading language)
+
+Strategic decision after user pushback: product stays 3D (interactive
+diorama, no game engine for now). The fundamental route to 3D charm =
+STOP SIMULATING LIGHT, START DESIGNING IT (Tiny Glade/Alto class), plus
+art-grade assets later (AI image->3D generation is the likely route
+for a bespoke library — Meshy/Tripo class tools).
+
+Shipped:
+- design_sun(): one source of truth for sun euler + photon dir.
+- light_ramp_nodes(): dot(N, -sun) -> authored ColorRamp. SNOW_STOPS
+  (deep blue shadow -> pale mid -> warm cream lit), ROCK_STOPS,
+  ASSET_STOPS. All colours are design decisions in code, tunable.
+- Terrain: ramps replace flat zone colours; fake bounce via emission
+  0.22 of designed colour; SSS cut to 0.12; roughness 1.
+- ramp_kit_materials(): kit + wood materials multiplied by the same
+  light ramp -> whole scene shares one light language.
+- World: Light Path split — camera rays see saturated gradient sky,
+  diffuse rays see soft cool fill. Sun demoted to soft warm support
+  (energy 2.4, angle 0.15).
+- Groomed runs: cool blue tint (white-on-cream was invisible).
+- Crowding radii up again (chalet 0.75s, canopy 0.26w, props 0.5w).
+- BONUS: no Cycles-only nodes -> user's Material Preview viewport now
+  matches renders closely for the first time.
+
+Next: more shading contrast tuning; rock faces need real treatment
+(crag geometry or dedicated ramp zone); clouds + cornice still open;
+AI->3D bespoke asset library to replace Kenney kit ceiling.
