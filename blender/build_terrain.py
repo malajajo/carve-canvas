@@ -911,14 +911,18 @@ def main():
     add_chalets(config, heightmap, mask, landcover, meta, parent=obj)
     add_lighting_and_camera(obj, config["terrain"].get("camera_distance", 1.15))
 
-    # Open in Material Preview so colours show immediately (Solid mode is
-    # Blender's default and renders everything grey)
+    # Open looking through the composed camera, in Material Preview with
+    # OUR sun and sky (not Blender's default studio HDRI) — so what the
+    # user sees on open matches the renders as closely as the viewport can
     for screen in bpy.data.screens:
         for area in screen.areas:
             if area.type == "VIEW_3D":
                 for space in area.spaces:
                     if space.type == "VIEW_3D":
                         space.shading.type = "MATERIAL"
+                        space.shading.use_scene_world = True
+                        space.shading.use_scene_lights = True
+                        space.region_3d.view_perspective = "CAMERA"
 
     out = ROOT / "output" / f"{config['slug']}.blend"
     out.parent.mkdir(exist_ok=True)
