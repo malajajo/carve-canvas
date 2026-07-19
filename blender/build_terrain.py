@@ -323,15 +323,15 @@ def light_ramp_nodes(nt, node, sun_dir, stops):
     return ramp.outputs["Color"]
 
 
-SNOW_STOPS = [(0.35, (0.42, 0.54, 0.90, 1.0)),   # shadow: deep soft blue
-              (0.62, (0.82, 0.88, 1.00, 1.0)),   # mid: pale blue-white
-              (0.85, (1.00, 0.98, 0.92, 1.0))]   # lit: warm cream
-ROCK_STOPS = [(0.30, (0.24, 0.22, 0.30, 1.0)),
-              (0.60, (0.46, 0.40, 0.35, 1.0)),
-              (0.85, (0.66, 0.57, 0.46, 1.0))]
-ASSET_STOPS = [(0.30, (0.62, 0.68, 0.95, 1.0)),
-               (0.60, (0.95, 0.95, 0.97, 1.0)),
-               (0.85, (1.08, 1.04, 0.96, 1.0))]
+SNOW_STOPS = [(0.38, (0.30, 0.44, 0.88, 1.0)),   # shadow: deep saturated blue
+              (0.58, (0.72, 0.82, 1.00, 1.0)),   # mid: clear pale blue
+              (0.78, (1.06, 1.00, 0.90, 1.0))]   # lit: glowing warm cream
+ROCK_STOPS = [(0.35, (0.20, 0.19, 0.32, 1.0)),
+              (0.60, (0.48, 0.40, 0.34, 1.0)),
+              (0.82, (0.78, 0.64, 0.48, 1.0))]
+ASSET_STOPS = [(0.32, (0.50, 0.58, 0.95, 1.0)),
+               (0.58, (0.92, 0.94, 1.00, 1.0)),
+               (0.82, (1.15, 1.08, 0.96, 1.0))]
 
 
 def ramp_kit_materials(sun_dir):
@@ -540,10 +540,10 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None, sun_dir=(0.5, 0.
     # Soft blue shading in crevices (ambient-occlusion multiply) gives the
     # marshmallow form-definition the flat sun cannot
     ao = node("ShaderNodeAmbientOcclusion")
-    ao.inputs["Distance"].default_value = 0.35
+    ao.inputs["Distance"].default_value = 0.55
     shade = node("ShaderNodeMix", data_type="RGBA", blend_type="MULTIPLY")
     shade.inputs["Factor"].default_value = 1.0
-    shade.inputs[7].default_value = (0.62, 0.68, 0.85, 1.0)  # blue crevice tint
+    shade.inputs[7].default_value = (0.52, 0.60, 0.88, 1.0)  # blue crevice tint
     nt.links.new(mix_groom.outputs[2], shade.inputs[6])
     final = node("ShaderNodeMix", data_type="RGBA")
     nt.links.new(ao.outputs["AO"], final.inputs["Factor"])
@@ -968,6 +968,45 @@ def add_features(config, H, mask, meta, parent=None):
           f"{len(py_verts) // 8} pylons, {len(ch_verts) // 8} chairs")
 
 
+def add_clouds(config, parent):
+    """Stylised cloud puffs ringing the island underside."""
+    import bmesh
+    ts = config["terrain"]["target_size"]
+    rng = np.random.default_rng(5)
+    bm = bmesh.new()
+    n_clusters = 12
+    for k in range(n_clusters):
+        ang = 2 * np.pi * (k + rng.uniform(-0.25, 0.25)) / n_clusters
+        R = ts * rng.uniform(0.52, 0.72)
+        cx, cy = R * np.cos(ang), R * np.sin(ang)
+        cz = ts * rng.uniform(-0.24, -0.06)
+        for _ in range(int(rng.integers(3, 7))):
+            r = ts * rng.uniform(0.05, 0.12)
+            off = (cx + rng.normal(0, ts * 0.05), cy + rng.normal(0, ts * 0.05),
+                   cz + rng.normal(0, ts * 0.018))
+            mat = np.identity(4)
+            mat[:3, 3] = off
+            import mathutils
+            bmesh.ops.create_icosphere(bm, subdivisions=2, radius=r,
+                                       matrix=mathutils.Matrix(mat.tolist()))
+    mesh = bpy.data.meshes.new("clouds")
+    bm.to_mesh(mesh)
+    bm.free()
+    for poly in mesh.polygons:
+        poly.use_smooth = True
+    cmat = bpy.data.materials.new("cloud")
+    bsdf = cmat.node_tree.nodes["Principled BSDF"]
+    bsdf.inputs["Base Color"].default_value = (0.96, 0.98, 1.0, 1.0)
+    bsdf.inputs["Roughness"].default_value = 1.0
+    bsdf.inputs["Emission Color"].default_value = (0.90, 0.94, 1.0, 1.0)
+    bsdf.inputs["Emission Strength"].default_value = 0.45
+    mesh.materials.append(cmat)
+    obj = bpy.data.objects.new("clouds", mesh)
+    obj.parent = parent
+    bpy.context.collection.objects.link(obj)
+    print(f"clouds: {n_clusters} puff clusters")
+
+
 def add_lighting_and_camera(obj, cam_dist=1.15, village=None, target_size=10.0, sun_euler=(1.15, 0.0, 0.785)):
     from math import radians
 
@@ -985,8 +1024,8 @@ def add_lighting_and_camera(obj, cam_dist=1.15, village=None, target_size=10.0, 
     mr.inputs["From Max"].default_value = 0.65
     nt.links.new(sep.outputs["Z"], mr.inputs["Value"])
     ramp = nt.nodes.new("ShaderNodeValToRGB")
-    ramp.color_ramp.elements[0].color = (0.55, 0.75, 0.98, 1.0)  # pale warm horizon
-    ramp.color_ramp.elements[1].color = (0.10, 0.32, 0.78, 1.0)  # saturated zenith
+    ramp.color_ramp.elements[0].color = (0.85, 1.05, 1.30, 1.0)  # bright pale horizon
+    ramp.color_ramp.elements[1].color = (0.18, 0.48, 1.15, 1.0)  # saturated sky blue
     nt.links.new(mr.outputs["Result"], ramp.inputs["Fac"])
     # camera rays see the pretty gradient; diffuse rays see a soft cool fill
     lp = nt.nodes.new("ShaderNodeLightPath")
@@ -1097,6 +1136,7 @@ def main():
             add_variation_nodes(mat, hue_amount=0.04, val_amount=0.5)
     ramp_kit_materials(sun_dir)
 
+    add_clouds(config, parent=obj)
     add_lighting_and_camera(obj, config["terrain"].get("camera_distance", 1.15),
                             village, t["target_size"], sun_euler)
 

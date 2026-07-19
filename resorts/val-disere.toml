@@ -47,7 +47,7 @@ piste_radius = 0.0    # ribbons retired: carved+brightened runs carry the pistes
 lift_clearance = 0.03
 pylon_spacing_m = 250
 min_piste_len_m = 200
-carve_depth_m = 6      # pistes carved into the snow as groomed runs
+carve_depth_m = 10
 carve_width_m = 30
 
 [trees]
@@ -62,5 +62,5 @@ size_m = 14            # near-real footprint
 depth_frac = 0.18
 rings = 14
 taper = 0.85
-lip_bulge = 0.08
-lip_rings = 4
+lip_bulge = 0.15
+lip_rings = 5
