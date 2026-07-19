@@ -165,3 +165,39 @@ composition.
 Phase 3 (if needed): full recomposition from peak/valley primitives.
 
 Also user flagged: trees are bad (deal with later).
+
+## 2026-07-19 — The vignette + CC0 assets (the breakthrough session)
+
+User approved scope cut to village + 3 slopes, CC0 assets, gap-analysis
+process. Result: first render in the same visual family as the
+reference. What shipped:
+
+- **Vignette bbox** (6.950-7.005, 45.418-45.462, ~4x5km): village,
+  La Face de Bellevarde, Solaise. Tight scale makes objects readable —
+  the single highest-impact change of the whole project.
+- **Kenney Holiday Kit (CC0)** in assets/kenney/: tiered snowy pines,
+  snow-capped cabin roofs, lanterns/benches/snowmen/sleds/snow-piles.
+  GLBs reference Textures/colormap.png RELATIVE — must copy the
+  Textures dir next to the glbs or everything renders magenta.
+- **Chalets** = procedural timber box + kit snow-roof (modular wall
+  assembly judged too risky blind; box+roof looks right).
+- **Carved groomed runs**: stylise.py rasterises pistes into the
+  heightmap (carve_depth_m/carve_width_m) + groom.npy mask -> shader
+  brightens runs toward clean white. Colored ribbons OFF
+  (piste_radius=0 skips them) — runs are terrain now, not overlay.
+  GOTCHA: OSM ways extend past the bbox -> negative grid coords ->
+  python negative-slice near-filled the whole mask. Bounds-check stamps.
+- **Composed camera**: village anchor from built-mask centroid; camera
+  beyond village looking inward (0.95/0.55 of target_size), DOF f/3.2
+  focused on village; sun azimuth adaptive (over camera's shoulder).
+- **Placement erosion**: erode(mask) keeps trees/buildings off the rim
+  (they were spilling onto the underside).
+- Catalog-render trick: render all kit pieces in a row FIRST to see
+  dims/origins before writing placement code.
+- Factory-settings scenes default to EEVEE which crashes headless —
+  always set engine CYCLES in ad-hoc render scripts.
+
+Remaining gaps vs reference (next session): warmer golden light;
+clouds around island + sky; thicker cornice drips on the lip; village
+readability (fewer, larger, better-arranged buildings + window glow);
+tree colour variety; foreground props scale.

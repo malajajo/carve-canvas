@@ -17,6 +17,37 @@ import bpy
 import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
+ASSET_DIR = ROOT / "assets" / "kenney"
+
+
+def load_assets(names):
+    """Import CC0 glb models; return dict name -> object (kept out of scene)."""
+    lib = {}
+    for name in names:
+        path = ASSET_DIR / f"{name}.glb"
+        if not path.exists():
+            print(f"asset missing: {name}")
+            continue
+        before = set(bpy.data.objects)
+        bpy.ops.import_scene.gltf(filepath=str(path))
+        new = [o for o in bpy.data.objects if o not in before]
+        for o in new:
+            for c in list(o.users_collection):
+                c.objects.unlink(o)
+        meshes = [o for o in new if o.type == "MESH"]
+        if meshes:
+            lib[name] = meshes[0]
+    return lib
+
+
+def place(asset, loc, rot_z, scale, parent):
+    o = asset.copy()
+    o.location = loc
+    o.rotation_euler = (0.0, 0.0, rot_z)
+    o.scale = (scale, scale, scale)
+    o.parent = parent
+    bpy.context.collection.objects.link(o)
+    return o
 
 
 def load_inputs():
@@ -30,7 +61,9 @@ def load_inputs():
     mask = np.load(mask_path) if mask_path.exists() else np.ones(heightmap.shape, dtype=bool)
     lc_path = data_dir / "landcover.npz"
     landcover = dict(np.load(lc_path)) if lc_path.exists() else None
-    return config, heightmap, mask, landcover, meta
+    groom_path = data_dir / "groom.npy"
+    groom = np.load(groom_path) if groom_path.exists() else None
+    return config, heightmap, mask, landcover, groom, meta
 
 
 def boundary_loop(faces):
@@ -71,7 +104,7 @@ def boundary_loop(faces):
     return loops[0]
 
 
-def build_mesh(config, H, mask, meta, landcover=None):
+def build_mesh(config, H, mask, meta, landcover=None, groom=None):
     t = config["terrain"]
     ny, nx = H.shape
     extent_x, extent_y = meta["extent_m"]
@@ -229,6 +262,15 @@ def build_mesh(config, H, mask, meta, landcover=None):
             lip[idx] = w
     lip_attr = mesh.attributes.new(name="snow_lip", type="FLOAT", domain="POINT")
     lip_attr.data.foreach_set("value", lip)
+
+    # --- Groomed-piste mask as a vertex attribute for the shader ---
+    if groom is not None:
+        grid_n = ny * nx
+        garr = np.zeros(len(used), dtype=np.float32)
+        on_g = used < grid_n
+        garr[on_g] = groom.ravel()[used[on_g]]
+        g_attr = mesh.attributes.new(name="groom", type="FLOAT", domain="POINT")
+        g_attr.data.foreach_set("value", garr)
 
     obj = bpy.data.objects.new(config["name"], mesh)
     bpy.context.collection.objects.link(obj)
@@ -399,6 +441,16 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
     nt.links.new(mix_forest.outputs[2], mix_rock.inputs[6])
     nt.links.new(rockiness, mix_rock.inputs["Factor"])
 
+    # Groomed runs: brighten toward clean corduroy white
+    groom_attr = node("ShaderNodeAttribute", attribute_name="groom")
+    groom_f = node("ShaderNodeMath", operation="MULTIPLY")
+    groom_f.inputs[1].default_value = 0.8
+    nt.links.new(groom_attr.outputs["Fac"], groom_f.inputs[0])
+    mix_groom = node("ShaderNodeMix", data_type="RGBA")
+    mix_groom.inputs[7].default_value = (0.93, 0.95, 1.0, 1.0)
+    nt.links.new(mix_rock.outputs[2], mix_groom.inputs[6])
+    nt.links.new(groom_f.outputs[0], mix_groom.inputs["Factor"])
+
     # Soft blue shading in crevices (ambient-occlusion multiply) gives the
     # marshmallow form-definition the flat sun cannot
     ao = node("ShaderNodeAmbientOcclusion")
@@ -406,233 +458,144 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
     shade = node("ShaderNodeMix", data_type="RGBA", blend_type="MULTIPLY")
     shade.inputs["Factor"].default_value = 1.0
     shade.inputs[7].default_value = (0.62, 0.68, 0.85, 1.0)  # blue crevice tint
-    nt.links.new(mix_rock.outputs[2], shade.inputs[6])
+    nt.links.new(mix_groom.outputs[2], shade.inputs[6])
     final = node("ShaderNodeMix", data_type="RGBA")
     nt.links.new(ao.outputs["AO"], final.inputs["Factor"])
     nt.links.new(shade.outputs[2], final.inputs[6])   # occluded -> shaded
-    nt.links.new(mix_rock.outputs[2], final.inputs[7])  # open -> full colour
+    nt.links.new(mix_groom.outputs[2], final.inputs[7])  # open -> full colour
     nt.links.new(final.outputs[2], bsdf.inputs["Base Color"])
     obj.data.materials.append(mat)
 
 
-PINE = (0.045, 0.12, 0.06, 1.0)
-PINE_SNOWY = (0.55, 0.62, 0.58, 1.0)
-TRUNK = (0.10, 0.06, 0.035, 1.0)
+WOOD = (0.30, 0.17, 0.09, 1.0)  # timber matched to the kit palette
 
 
-def pine_template():
-    """Unit-height low-poly pine: 4-sided trunk + three 7-sided cones.
-    Returns (verts, faces, face_material_index) with materials
-    0=foliage 1=trunk."""
-    verts, faces, mats = [], [], []
-
-    def ring(radius, z, n):
-        start = len(verts)
-        for i in range(n):
-            a = 2 * np.pi * i / n
-            verts.append((radius * np.cos(a), radius * np.sin(a), z))
-        return start
-
-    # trunk
-    b0 = ring(0.05, 0.0, 4)
-    b1 = ring(0.04, 0.22, 4)
-    for i in range(4):
-        j = (i + 1) % 4
-        faces.append([b0 + i, b0 + j, b1 + j, b1 + i])
-        mats.append(1)
-    # three stacked cones
-    for r, z0, z1 in ((0.30, 0.12, 0.55), (0.22, 0.38, 0.78), (0.14, 0.62, 1.0)):
-        base = ring(r, z0, 7)
-        apex = len(verts)
-        verts.append((0.0, 0.0, z1))
-        for i in range(7):
-            j = (i + 1) % 7
-            faces.append([base + i, base + j, apex])
-            mats.append(0)
-        # underside of the cone skirt
-        faces.append([base + i for i in range(6, -1, -1)])
-        mats.append(0)
-    return np.array(verts), faces, mats
+def erode(mask, n=3):
+    """Shrink a boolean mask by n cells (keeps placements off the rim)."""
+    m = mask.copy()
+    for _ in range(n):
+        m = (m & np.roll(m, 1, 0) & np.roll(m, -1, 0)
+               & np.roll(m, 1, 1) & np.roll(m, -1, 1))
+    return m
 
 
-def add_trees(config, H, mask, landcover, meta, parent):
-    """Scatter stylised pines using the real forest mask, avoiding pistes."""
+def sample_grid(rng, prob):
+    """Bernoulli-sample grid cells; returns (rows, cols) of hits."""
+    return np.nonzero(rng.random(prob.shape) < np.clip(prob, 0, 1))
+
+
+def scatter_coords(rng, rows, cols, H, mask, config, meta):
+    """Jittered scene xyz for grid cell hits."""
+    t = config["terrain"]
+    ny, nx = H.shape
+    extent_x, extent_y = meta["extent_m"]
+    scale = t["target_size"] / max(extent_x, extent_y)
+    dx = extent_x / (nx - 1) * scale
+    dy = extent_y / (ny - 1) * scale
+    Z = (H - H[mask].min()) * scale * t["z_exaggeration"]
+    jit = rng.random((len(rows), 2))
+    tc, tr = cols + jit[:, 0], rows + jit[:, 1]
+    x = (tc - (nx - 1) / 2) * dx
+    y = ((ny - 1) / 2 - tr) * dy
+    c0 = np.clip(tc, 0, nx - 1.001).astype(int)
+    r0 = np.clip(tr, 0, ny - 1.001).astype(int)
+    fc, fr = tc - c0, tr - r0
+    z = (Z[r0, c0] * (1 - fc) * (1 - fr) + Z[r0, c0 + 1] * fc * (1 - fr)
+         + Z[r0 + 1, c0] * (1 - fc) * fr + Z[r0 + 1, c0 + 1] * fc * fr)
+    return x, y, z, scale
+
+
+def add_trees(config, H, mask, landcover, groom, meta, assets, parent):
+    """Kenney snowy pines scattered by the real forest mask."""
     if landcover is None or "trees" not in config:
         return
     tcfg = config["trees"]
-    t = config["terrain"]
-    ny, nx = H.shape
-    extent_x, extent_y = meta["extent_m"]
-    scale = t["target_size"] / max(extent_x, extent_y)
-    dx = extent_x / (nx - 1) * scale
-    dy = extent_y / (ny - 1) * scale
-    Z = (H - H[mask].min()) * scale * t["z_exaggeration"]
-
-    forest = landcover["forest"] * mask
-    # Keep-out: no trees on pistes (features grid coords) or buildings
+    forest = landcover["forest"] * erode(mask)
     keep_out = landcover["built"] > 0.15
-    fpath = ROOT / "data" / config["slug"] / "features.json"
-    if fpath.exists():
-        feats = json.loads(fpath.read_text())
-        for piste in feats["pistes"]:
-            pts = np.asarray(piste["points"])
-            seg = np.hypot(*np.diff(pts, axis=0).T)
-            n = np.maximum(1, (seg / 0.7).astype(int))
-            for (a, b), steps in zip(zip(pts[:-1], pts[1:]), n):
-                for s in range(steps + 1):
-                    c, r = a + (b - a) * (s / steps)
-                    ci, ri = int(round(c)), int(round(r))
-                    keep_out[max(ri - 1, 0):ri + 2, max(ci - 1, 0):ci + 2] = True
+    if groom is not None:
+        keep_out |= groom > 0.35
 
     rng = np.random.default_rng(42)
-    p = np.clip(forest * tcfg["density"], 0, 1)
+    p = forest * tcfg["density"]
     p[keep_out] = 0
-    rows, cols = np.nonzero(rng.random(p.shape) < p)
+    rows, cols = sample_grid(rng, p)
     if len(rows) == 0:
-        print("trees: no forest cells inside boundary")
         return
+    x, y, z, scale = scatter_coords(rng, rows, cols, H, mask, config, meta)
 
-    jit = rng.random((len(rows), 2))
-    tcols = cols + jit[:, 0]
-    trows = rows + jit[:, 1]
-    x = (tcols - (nx - 1) / 2) * dx
-    y = ((ny - 1) / 2 - trows) * dy
-    c0 = np.clip(tcols, 0, nx - 1.001).astype(int)
-    r0 = np.clip(trows, 0, ny - 1.001).astype(int)
-    fc, fr = tcols - c0, trows - r0
-    z = (Z[r0, c0] * (1 - fc) * (1 - fr) + Z[r0, c0 + 1] * fc * (1 - fr)
-         + Z[r0 + 1, c0] * (1 - fc) * fr + Z[r0 + 1, c0 + 1] * fc * fr)
-
-    tv, tf, tm = pine_template()
-    h = tcfg["height_m"] * scale * t["z_exaggeration"]
-    heights = h * rng.uniform(0.7, 1.35, len(rows))
-    angles = rng.uniform(0, 2 * np.pi, len(rows))
-    snowy = rng.random(len(rows)) < tcfg["snowy_share"]
-
-    all_verts = np.empty((len(rows), len(tv), 3))
-    cosa, sina = np.cos(angles), np.sin(angles)
-    vx, vy, vz = tv[:, 0], tv[:, 1], tv[:, 2]
-    all_verts[..., 0] = (vx[None, :] * cosa[:, None] - vy[None, :] * sina[:, None]) * heights[:, None] + x[:, None]
-    all_verts[..., 1] = (vx[None, :] * sina[:, None] + vy[None, :] * cosa[:, None]) * heights[:, None] + y[:, None]
-    all_verts[..., 2] = vz[None, :] * heights[:, None] + (z - 0.15 * heights)[:, None]
-
-    nv = len(tv)
-    all_faces, all_mats = [], []
+    variants = [assets[n] for n in ("tree-snow-a", "tree-snow-b", "tree-snow-c") if n in assets]
+    plain = assets.get("tree")
+    h_units = tcfg["height_m"] * scale * config["terrain"]["z_exaggeration"]
     for i in range(len(rows)):
-        off = i * nv
-        for f, m in zip(tf, tm):
-            all_faces.append([v + off for v in f])
-            # snowy trees use material 2 for foliage
-            all_mats.append(2 if (snowy[i] and m == 0) else m)
-
-    mesh = bpy.data.meshes.new("trees")
-    mesh.from_pydata(all_verts.reshape(-1, 3).tolist(), [], all_faces)
-    mesh.validate()
-
-    def flat(name, color, rough=0.7):
-        mat = bpy.data.materials.new(name)
-        bsdf = mat.node_tree.nodes["Principled BSDF"]
-        bsdf.inputs["Base Color"].default_value = color
-        bsdf.inputs["Roughness"].default_value = rough
-        return mat
-
-    mesh.materials.append(flat("pine", PINE))
-    mesh.materials.append(flat("trunk", TRUNK))
-    mesh.materials.append(flat("pine_snowy", PINE_SNOWY))
-    mesh.polygons.foreach_set("material_index", all_mats)
-
-    obj = bpy.data.objects.new("trees", mesh)
-    obj.parent = parent
-    bpy.context.collection.objects.link(obj)
-    print(f"trees: {len(rows)} pines placed ({int(snowy.sum())} snowy)")
+        snowy = rng.random() < tcfg["snowy_share"]
+        asset = variants[int(rng.integers(len(variants)))] if (snowy or plain is None) else plain
+        s = h_units * rng.uniform(0.65, 1.4) / asset.dimensions.z
+        place(asset, (x[i], y[i], z[i] - 0.15 * h_units * 0.3), rng.uniform(0, 6.283), s, parent)
+    print(f"trees: {len(rows)} kit pines placed")
 
 
-WALL = (0.23, 0.13, 0.06, 1.0)   # warm timber
-ROOF_SNOW = (0.90, 0.92, 0.95, 1.0)
-
-
-def add_chalets(config, H, mask, landcover, meta, parent):
-    """Gabled chalets seeded from the WorldCover built-up mask."""
+def add_chalets(config, H, mask, landcover, meta, assets, parent):
+    """Chalets: timber box bodies + Kenney thick-snow roofs."""
     if landcover is None:
         return
-    t = config["terrain"]
-    ny, nx = H.shape
-    extent_x, extent_y = meta["extent_m"]
-    scale = t["target_size"] / max(extent_x, extent_y)
-    dx = extent_x / (nx - 1) * scale
-    dy = extent_y / (ny - 1) * scale
-    Z = (H - H[mask].min()) * scale * t["z_exaggeration"]
-
-    built = landcover["built"] * mask
+    built = landcover["built"] * erode(mask, 4)
     rng = np.random.default_rng(7)
-    # Denser sampling than trees: a village cell can hold several buildings
-    p = np.clip(built * 2.2, 0, 1)
-    rows, cols = np.nonzero(rng.random(p.shape) < p)
-    extra = rng.random(len(rows)) < np.clip(built[rows, cols] * 1.2 - 0.4, 0, 0.8)
-    rows = np.concatenate([rows, rows[extra]])
-    cols = np.concatenate([cols, cols[extra]])
+    rows, cols = sample_grid(rng, built * 1.1)
     if len(rows) == 0:
-        print("chalets: no built-up cells inside boundary")
         return
+    x, y, z, scale = scatter_coords(rng, rows, cols, H, mask, config, meta)
 
-    jit = rng.random((len(rows), 2))
-    bcols, brows = cols + jit[:, 0], rows + jit[:, 1]
-    x = (bcols - (nx - 1) / 2) * dx
-    y = ((ny - 1) / 2 - brows) * dy
-    c0 = np.clip(bcols, 0, nx - 1.001).astype(int)
-    r0 = np.clip(brows, 0, ny - 1.001).astype(int)
-    fc, fr = bcols - c0, brows - r0
-    z = (Z[r0, c0] * (1 - fc) * (1 - fr) + Z[r0, c0 + 1] * fc * (1 - fr)
-         + Z[r0 + 1, c0] * (1 - fc) * fr + Z[r0 + 1, c0 + 1] * fc * fr)
+    # body prototype: simple box, no bottom
+    mat_wood = bpy.data.materials.new("chalet_wood")
+    bsdf = mat_wood.node_tree.nodes["Principled BSDF"]
+    bsdf.inputs["Base Color"].default_value = WOOD
+    bsdf.inputs["Roughness"].default_value = 0.85
+    bm_verts = [(-0.5, -0.55, 0), (0.5, -0.55, 0), (0.5, 0.55, 0), (-0.5, 0.55, 0),
+                (-0.5, -0.55, 0.62), (0.5, -0.55, 0.62), (0.5, 0.55, 0.62), (-0.5, 0.55, 0.62)]
+    bm_faces = [[0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7], [4, 5, 6, 7]]
+    body_mesh = bpy.data.meshes.new("chalet_body")
+    body_mesh.from_pydata(bm_verts, [], bm_faces)
+    body_mesh.materials.append(mat_wood)
+    body_proto = bpy.data.objects.new("chalet_body", body_mesh)
 
-    # Template gabled house, unit footprint, wall height 0.55, ridge 1.0
-    hv = np.array([
-        (-0.5, -0.35, 0.0), (0.5, -0.35, 0.0), (0.5, 0.35, 0.0), (-0.5, 0.35, 0.0),
-        (-0.5, -0.35, 0.55), (0.5, -0.35, 0.55), (0.5, 0.35, 0.55), (-0.5, 0.35, 0.55),
-        (-0.5, 0.0, 1.0), (0.5, 0.0, 1.0),
-    ])
-    hf = [([0, 1, 5, 4], 0), ([1, 2, 6, 5], 0), ([2, 3, 7, 6], 0), ([3, 0, 4, 7], 0),
-          ([4, 5, 9, 8], 1), ([6, 7, 8, 9], 1), ([5, 6, 9], 0), ([7, 4, 8], 0)]
-
-    base_w = 30 * scale  # ~18m footprint, stylised
-    sizes = base_w * rng.uniform(0.7, 1.9, len(rows))
-    heights = sizes * rng.uniform(0.55, 0.75, len(rows))
-    angles = rng.uniform(0, 2 * np.pi, len(rows))
-
-    all_verts = np.empty((len(rows), len(hv), 3))
-    cosa, sina = np.cos(angles), np.sin(angles)
-    vx, vy, vz = hv[:, 0], hv[:, 1], hv[:, 2]
-    all_verts[..., 0] = (vx[None] * cosa[:, None] - vy[None] * sina[:, None]) * sizes[:, None] + x[:, None]
-    all_verts[..., 1] = (vx[None] * sina[:, None] + vy[None] * cosa[:, None]) * sizes[:, None] + y[:, None]
-    all_verts[..., 2] = vz[None] * heights[:, None] + (z - 0.25 * heights)[:, None]
-
-    nvh = len(hv)
-    all_faces, all_mats = [], []
+    roofs = [assets[n] for n in ("cabin-roof-snow", "cabin-roof-snow-chimney",
+                                 "cabin-roof-snow-point") if n in assets]
+    size_units = config["chalets"]["size_m"] * scale
+    n_placed = 0
     for i in range(len(rows)):
-        off = i * nvh
-        for f, m in hf:
-            all_faces.append([v + off for v in f])
-            all_mats.append(m)
-
-    mesh = bpy.data.meshes.new("chalets")
-    mesh.from_pydata(all_verts.reshape(-1, 3).tolist(), [], all_faces)
-    mesh.validate()
-
-    for name, color in (("chalet_wall", WALL), ("chalet_roof", ROOF_SNOW)):
-        mat = bpy.data.materials.new(name)
-        bsdf = mat.node_tree.nodes["Principled BSDF"]
-        bsdf.inputs["Base Color"].default_value = color
-        bsdf.inputs["Roughness"].default_value = 0.75
-        mesh.materials.append(mat)
-    mesh.polygons.foreach_set("material_index", all_mats)
-
-    obj = bpy.data.objects.new("chalets", mesh)
-    obj.parent = parent
-    bpy.context.collection.objects.link(obj)
-    print(f"chalets: {len(rows)} buildings placed")
+        s = size_units * rng.uniform(0.8, 1.7)
+        rot = rng.uniform(0, 6.283)
+        base_z = z[i] - 0.12 * s
+        body = place(body_proto, (x[i], y[i], base_z), rot, s, parent)
+        roof = roofs[int(rng.integers(len(roofs)))]
+        rs = s * 1.05 / roof.dimensions.x
+        place(roof, (x[i], y[i], base_z + 0.62 * s), rot, rs, parent)
+        n_placed += 1
+    print(f"chalets: {n_placed} kit-roofed buildings placed")
 
 
-# European piste colour convention (linear RGB)
+def add_props(config, H, mask, landcover, meta, assets, parent):
+    """Village life: lanterns, benches, snowmen, sleds, snow piles."""
+    if landcover is None:
+        return
+    built = landcover["built"] * erode(mask, 4)
+    rng = np.random.default_rng(99)
+    rows, cols = sample_grid(rng, built * 0.7)
+    if len(rows) == 0:
+        return
+    x, y, z, scale = scatter_coords(rng, rows, cols, H, mask, config, meta)
+    kinds = [("lantern", 3.2), ("bench", 1.4), ("snowman", 2.0), ("sled", 1.0), ("snow-pile", 1.2)]
+    kinds = [(assets[n], h) for n, h in kinds if n in assets]
+    zx = config["terrain"]["z_exaggeration"]
+    n = 0
+    for i in range(len(rows)):
+        asset, h_m = kinds[int(rng.integers(len(kinds)))]
+        s = h_m * scale * zx / asset.dimensions.z
+        place(asset, (x[i], y[i], z[i] - 0.05 * s), rng.uniform(0, 6.283), s, parent)
+        n += 1
+    print(f"props: {n} village props placed")
+
+
 # Pastel snow-tints: groomed runs read as white swaths with a hint of
 # difficulty colour, not GIS overlay lines
 PISTE_COLORS = {
@@ -744,7 +707,7 @@ def add_features(config, H, mask, meta, parent=None):
     r_piste = f["piste_radius"]
     by_difficulty = {}
     n_pistes = 0
-    for piste in feats["pistes"]:
+    for piste in (feats["pistes"] if r_piste > 0 else []):
         diff = piste["difficulty"] if piste["difficulty"] in PISTE_COLORS else "intermediate"
         pts = densify(smooth_polyline(piste["points"]), step=0.6)
         cols, rows = pts[:, 0], pts[:, 1]
@@ -834,7 +797,7 @@ def add_features(config, H, mask, meta, parent=None):
           f"{len(py_verts) // 8} pylons, {len(ch_verts) // 8} chairs")
 
 
-def add_lighting_and_camera(obj, cam_dist=1.15):
+def add_lighting_and_camera(obj, cam_dist=1.15, village=None, target_size=10.0):
     from math import radians
 
     # Art-directed sky: saturated blue gradient backdrop (physical Nishita
@@ -864,7 +827,17 @@ def add_lighting_and_camera(obj, cam_dist=1.15):
     sun_data.color = (1.0, 0.86, 0.62)
     sun_data.angle = 0.05
     sun = bpy.data.objects.new("Sun", sun_data)
-    sun.rotation_euler = (1.15, 0.0, 0.785)
+    if village is not None:
+        vx, vy, _ = village
+        vdir = np.array([vx, vy])
+        vdir = vdir / (np.linalg.norm(vdir) + 1e-9)
+        ang = 0.61  # ~35 deg over the camera's left shoulder
+        ca, sa = np.cos(ang), np.sin(ang)
+        lx = vdir[0] * ca - vdir[1] * sa
+        ly = vdir[0] * sa + vdir[1] * ca
+        sun.rotation_euler = (1.15, 0.0, float(np.arctan2(lx, -ly)))
+    else:
+        sun.rotation_euler = (1.15, 0.0, 0.785)
     bpy.context.collection.objects.link(sun)
 
     # Standard transform keeps the saturated postcard colours (AgX greyed
@@ -874,7 +847,9 @@ def add_lighting_and_camera(obj, cam_dist=1.15):
     vs.exposure = -0.8
 
 
-    # Frame the camera on the object's bounding box from a 3/4 angle
+    # Frame the camera on the object's bounding box from a 3/4 angle,
+    # or — when a village anchor exists — compose village-front like a
+    # postcard: village in the foreground, slopes rising behind.
     bb = np.array(obj.bound_box)
     center = bb.mean(axis=0)
     d = float(max(bb.max(axis=0) - bb.min(axis=0))) * cam_dist
@@ -885,9 +860,20 @@ def add_lighting_and_camera(obj, cam_dist=1.15):
 
     cam_data = bpy.data.cameras.new("camera")
     cam_data.dof.use_dof = True            # tilt-shift miniature feel
-    cam_data.dof.aperture_fstop = 1.6
+    cam_data.dof.aperture_fstop = 3.2
     cam = bpy.data.objects.new("Camera", cam_data)
-    cam.location = (center[0] + d * 0.78, center[1] - d * 0.78, center[2] + d * 0.62)
+    if village is not None:
+        vx, vy, vz = village
+        vdir = np.array([vx, vy])
+        vdir = vdir / (np.linalg.norm(vdir) + 1e-9)
+        cam.location = (vx + vdir[0] * 0.95 * target_size,
+                        vy + vdir[1] * 0.95 * target_size,
+                        vz + 0.55 * target_size)
+        target.location = (vx - vdir[0] * 0.30 * target_size,
+                           vy - vdir[1] * 0.30 * target_size,
+                           vz + 0.02 * target_size)
+    else:
+        cam.location = (center[0] + d * 0.78, center[1] - d * 0.78, center[2] + d * 0.62)
     track = cam.constraints.new("TRACK_TO")
     track.target = target
     cam_data.dof.focus_object = target
@@ -896,20 +882,39 @@ def add_lighting_and_camera(obj, cam_dist=1.15):
 
 
 def main():
-    config, heightmap, mask, landcover, meta = load_inputs()
+    config, heightmap, mask, landcover, groom, meta = load_inputs()
 
     # Start from an empty scene
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    obj = build_mesh(config, heightmap, mask, meta, landcover)
+    obj = build_mesh(config, heightmap, mask, meta, landcover, groom)
 
     t = config["terrain"]
     z_scale = t["target_size"] / max(meta["extent_m"]) * t["z_exaggeration"]
     add_material(obj, config, float(heightmap[mask].min()), z_scale, landcover)
     add_features(config, heightmap, mask, meta, parent=obj)
-    add_trees(config, heightmap, mask, landcover, meta, parent=obj)
-    add_chalets(config, heightmap, mask, landcover, meta, parent=obj)
-    add_lighting_and_camera(obj, config["terrain"].get("camera_distance", 1.15))
+
+    assets = load_assets(["tree-snow-a", "tree-snow-b", "tree-snow-c", "tree",
+                          "cabin-roof-snow", "cabin-roof-snow-chimney", "cabin-roof-snow-point",
+                          "lantern", "bench", "snowman", "sled", "snow-pile"])
+    add_trees(config, heightmap, mask, landcover, groom, meta, assets, parent=obj)
+    add_chalets(config, heightmap, mask, landcover, meta, assets, parent=obj)
+    add_props(config, heightmap, mask, landcover, meta, assets, parent=obj)
+
+    # Village anchor (scene coords) for postcard composition
+    village = None
+    if landcover is not None and (landcover["built"] * mask).sum() > 0:
+        b = landcover["built"] * mask
+        ny, nx = heightmap.shape
+        cy = float((b * np.arange(ny)[:, None]).sum() / b.sum())
+        cx = float((b * np.arange(nx)[None, :]).sum() / b.sum())
+        scale = t["target_size"] / max(meta["extent_m"])
+        dx = meta["extent_m"][0] / (nx - 1) * scale
+        dy = meta["extent_m"][1] / (ny - 1) * scale
+        vz = (heightmap[int(cy), int(cx)] - heightmap[mask].min()) * scale * t["z_exaggeration"]
+        village = ((cx - (nx - 1) / 2) * dx, ((ny - 1) / 2 - cy) * dy, vz)
+    add_lighting_and_camera(obj, config["terrain"].get("camera_distance", 1.15),
+                            village, t["target_size"])
 
     # Open looking through the composed camera, in Material Preview with
     # OUR sun and sky (not Blender's default studio HDRI) — so what the

@@ -80,6 +80,32 @@ def main() -> None:
         f = f * f * (3 - 2 * f)  # smoothstep
         stylised = stylised - st["edge_droop_m"] * (1 - f)
 
+    # 5. Carve groomed pistes into the snow as gentle grooves, and save the
+    #    groom mask so the shader can brighten the corduroy
+    feat_path = data_dir / "features.json"
+    fcfg = config.get("features", {})
+    if "carve_depth_m" in fcfg and feat_path.exists():
+        feats = json.loads(feat_path.read_text())
+        groom = np.zeros_like(stylised)
+        half_w_px = max(fcfg["carve_width_m"] / px_m / 2, 0.6)
+        rad = int(np.ceil(half_w_px))
+        for piste in feats["pistes"]:
+            pts = np.asarray(piste["points"])
+            for a, b in zip(pts[:-1], pts[1:]):
+                n = max(1, int(np.hypot(*(b - a)) * 2))
+                for i in range(n + 1):
+                    c, r = a + (b - a) * (i / n)
+                    ri, ci = int(round(r)), int(round(c))
+                    if not (0 <= ri < groom.shape[0] and 0 <= ci < groom.shape[1]):
+                        continue  # piste vertices outside the bbox grid
+                    groom[max(ri - rad, 0):min(ri + rad + 1, groom.shape[0]),
+                          max(ci - rad, 0):min(ci + rad + 1, groom.shape[1])] = 1
+        groom = np.clip(gaussian_filter(groom, sigma=half_w_px) * 1.6, 0, 1)
+        stylised = stylised - fcfg["carve_depth_m"] * groom
+        np.save(data_dir / "groom.npy", groom.astype(np.float32))
+        print(f"carved {len(feats['pistes'])} groomed runs "
+              f"({groom.mean() * 100:.0f}% of area)")
+
     np.save(data_dir / "heightmap_stylised.npy", stylised.astype(np.float32))
     print(f"wrote {data_dir}/heightmap_stylised.npy "
           f"(relief {stylised.max() - stylised.min():.0f} m, "
