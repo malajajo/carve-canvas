@@ -52,3 +52,9 @@ rings = 14
 taper = 0.85
 lip_bulge = 0.08
 lip_rings = 4
+
+[staging]
+flatten_base = 0.75
+peak_amp = 0.7
+edge_droop_m = 350
+droop_dist_m = 1500

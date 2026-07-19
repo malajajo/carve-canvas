@@ -21,6 +21,13 @@ macro_m = 900
 detail_gain = 0.55
 valley_gamma = 1.2     # >1 deepens valleys and makes peaks stand proud
 
+[staging]
+# Diorama staging: turn a "slab of terrain" into a composed dome
+flatten_base = 0.75    # fraction of the fitted base plane to remove (kills regional tilt)
+peak_amp = 0.7         # per-landform amplification: each massif swells around its own base
+edge_droop_m = 350     # terrain curls down toward the island rim (dome presentation)
+droop_dist_m = 1500    # how far from the rim the droop reaches inward
+
 [materials]
 treeline_m = 2150      # forest fades out above this real-world altitude
 treeline_blend_m = 150 # softness of the treeline transition

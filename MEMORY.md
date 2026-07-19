@@ -137,3 +137,31 @@ bloom shelved for now (do it in post or EEVEE later).
 Trade-off accepted: geographic micro-detail sacrificed for charm.
 The [style] knobs can walk it back per-resort if a peak loses its
 identity. Verify silhouettes of famous peaks still read.
+
+## 2026-07-19 — The staging thesis (user: "still fundamentally flat")
+
+THE core architectural insight of this project so far:
+
+**Cartography vs caricature.** A cropped real heightfield — however
+smoothed/exaggerated — is a field of semi-random relief with arbitrary
+tilt and edge heights. It reads as a slab cut from a bigger world,
+i.e. "scientific and flat". The reference image is a COMPOSED
+caricature: identity elements (village low in front, distinct peaks
+framing the back) re-staged on a domed pedestal. The DEM must become
+the *reference* we extract identity from, not the surface itself.
+
+Phase 1 shipped — staging transforms in stylise.py [staging]:
+  a. flatten_base: subtract fitted base plane (kills regional tilt)
+  b. peak_amp: per-landform amplification — each massif swells around
+     its own base (1000m/2500m gaussian split) -> sculptural bumps
+  c. edge_droop_m/droop_dist_m: terrain curls down toward the rim
+     (distance transform + smoothstep) -> dome presentation
+Proven on Val d'Isère: the slab is gone, massifs read as sculpture.
+
+Phase 2 (next): landmark caricature — extract iconic peaks (DEM
+prominence + OSM named summits), village anchor, main bowls; compress
+boring expanses, enlarge identity zones; village-front camera
+composition.
+Phase 3 (if needed): full recomposition from peak/valley primitives.
+
+Also user flagged: trees are bad (deal with later).

@@ -50,6 +50,36 @@ def main() -> None:
     norm = (stylised - lo) / (hi - lo)
     stylised = lo + (norm ** s["valley_gamma"]) * (hi - lo)
 
+    # 4. Diorama staging — from "slab of terrain" to composed dome.
+    #    A real cropped heightfield has arbitrary tilt and edge heights,
+    #    which reads as a flat scientific slab. Stage it instead.
+    if "staging" in config:
+        st = config["staging"]
+        mask_path = data_dir / "mask.npy"
+        mask = np.load(mask_path) if mask_path.exists() else np.ones(H.shape, bool)
+
+        # 4a. Remove the fitted base plane (regional tilt) inside the boundary
+        yy, xx = np.mgrid[0:H.shape[0], 0:H.shape[1]]
+        A = np.column_stack([xx[mask], yy[mask], np.ones(mask.sum())])
+        coef, *_ = np.linalg.lstsq(A, stylised[mask], rcond=None)
+        plane = coef[0] * xx + coef[1] * yy + coef[2]
+        stylised = stylised - st["flatten_base"] * (plane - plane[mask].min())
+
+        # 4b. Per-landform amplification: each massif swells around its own
+        #     base level -> distinct sculptural bumps, not a uniform stretch
+        base_deep = gaussian_filter(stylised, sigma=2500 / px_m)
+        mass = gaussian_filter(stylised, sigma=1000 / px_m) - base_deep
+        mass_n = np.clip(mass / max(mass.max(), 1), 0, 1)
+        stylised = base_deep + (stylised - base_deep) * (1 + st["peak_amp"] * mass_n)
+
+        # 4c. Edge droop: terrain curls down toward the rim -> the island
+        #     presents itself as a dome, the classic diorama silhouette
+        from scipy.ndimage import distance_transform_edt
+        dist_m = distance_transform_edt(mask) * px_m
+        f = np.clip(dist_m / st["droop_dist_m"], 0, 1)
+        f = f * f * (3 - 2 * f)  # smoothstep
+        stylised = stylised - st["edge_droop_m"] * (1 - f)
+
     np.save(data_dir / "heightmap_stylised.npy", stylised.astype(np.float32))
     print(f"wrote {data_dir}/heightmap_stylised.npy "
           f"(relief {stylised.max() - stylised.min():.0f} m, "
