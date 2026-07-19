@@ -12,7 +12,7 @@ north = 45.48
 [terrain]
 heightmap_size = 512   # pixels on the longest side of the heightmap grid
 target_size = 10.0     # Blender units for the longest horizontal side of the diorama
-z_exaggeration = 1.6   # vertical exaggeration applied to relief
+z_exaggeration = 3.2   # vertical exaggeration applied to relief
 
 [style]
 # Non-destructive stylisation of the raw DEM (pipeline/stylise.py)
@@ -24,9 +24,9 @@ valley_gamma = 1.2     # >1 deepens valleys and makes peaks stand proud
 [materials]
 treeline_m = 2150      # forest fades out above this real-world altitude
 treeline_blend_m = 150 # softness of the treeline transition
-rock_slope_deg = 45    # faces steeper than this shed their snow
-rock_blend_deg = 7     # softness of the snow->rock transition
-outcrop_slope_deg = 28 # rock patches start appearing above this slope
+rock_slope_deg = 62    # faces steeper than this shed their snow
+rock_blend_deg = 6     # softness of the snow->rock transition
+outcrop_slope_deg = 46 # rock patches start appearing above this slope
 outcrop_scale = 6.0    # patch size (higher = smaller, busier patches)
 outcrop_amount = 0.45  # 0 = pristine snow, 1 = heavily rock-strewn
 
@@ -43,7 +43,7 @@ snowy_share = 0.35     # fraction of pines rendered snow-dusted
 
 [underside]
 # Floating-island underside: rings taper inward and converge to a low point
-depth_frac = 0.22      # island depth below lowest terrain, fraction of longest side
+depth_frac = 0.15      # island depth below lowest terrain, fraction of longest side
 rings = 14             # vertical resolution of the taper
 taper = 0.85           # cos-profile exponent; lower = fuller belly, higher = sharper cone
 lip_bulge = 0.045      # outward bulge of the snow lip at the island rim

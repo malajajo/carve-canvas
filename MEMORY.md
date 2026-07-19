@@ -81,3 +81,31 @@ Append-only. Newest at the bottom. Keep entries short.
   clouds below island; night/dusk lighting variant; cable sag;
   southern-hemisphere resort (S-latitude tile naming untested);
   villages could use varied building types (church, hotel blocks).
+
+## 2026-07-19 — "This is flat" correction (user verdict was right)
+
+The user rejected the first showcase: flat, nowhere near the reference.
+Root causes and fixes — REMEMBER THESE:
+
+1. **True-scale geography is a pancake.** 11km wide + 1.5km relief =
+   6:1. The reference is ~1.5:1. z_exaggeration 1.6 was timid; now
+   2.6–3.2 per resort, targeting relief ≈ 40% of island width
+   (x = 0.4 * width_m / relief_m as starting point).
+2. **Slope thresholds must scale with exaggeration** — after raising
+   exag, 45° rock threshold caught half the terrain (muddy brown
+   mountains). Now rock 62°, outcrops 46° at ~3x exag.
+3. **AgX was the greyness.** Standard view transform + art-directed
+   gradient sky (deep zenith blue → pale horizon) + warm sun lamp
+   (1.0, 0.86, 0.62) beats the physical Nishita sky for this style.
+   Exposure -0.8. Nishita+AgX = washed cold porridge.
+4. **Camera composition matters as much as geometry**: from above the
+   rim looking into the bowl (offsets 0.78/0.78/0.62 of distance),
+   per-resort camera_distance knob (elongated islands need 1.6).
+5. **Underside dome**: sine z-profile + ring smoothing (3+4k iters)
+   kills the cone/rib artefacts. depth_frac 0.15 with tall relief.
+6. Snow material: roughness 0.95, specular 0.1 — else chrome sheen.
+
+Process lesson: I judged "looks good" from too few angles and accepted
+muted colour because each step was a small improvement on the last.
+Compare against docs/style-reference.png directly, not against the
+previous render.

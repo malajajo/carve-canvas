@@ -153,7 +153,7 @@ def build_mesh(config, H, mask, meta, landcover=None):
     for k in range(1, n_rings + 1):
         tk = k / n_rings
         # progressively stronger smoothing merges the lobes near the bottom
-        for _ in range(1 + 2 * k):
+        for _ in range(3 + 4 * k):
             ring_xy = 0.5 * ring_xy + 0.25 * (np.roll(ring_xy, 1, axis=0) + np.roll(ring_xy, -1, axis=0))
         centroid = ring_xy.mean(axis=0)
         s = np.cos(0.96 * tk * np.pi / 2) ** u["taper"]
@@ -161,7 +161,10 @@ def build_mesh(config, H, mask, meta, landcover=None):
         # like a thick blanket of snow overhanging the edge
         s *= 1.0 + u["lip_bulge"] * np.sin(np.pi * min(tk / 0.3, 1.0))
         xy = centroid + (ring_xy - centroid) * s
-        z = ring_z0 * (1 - tk) + (-depth) * tk
+        # Sine profile: drops fast at the rim, flattens at the bottom -> a
+        # rounded dome instead of a cone
+        zt = np.sin(tk * np.pi / 2)
+        z = ring_z0 * (1 - zt) + (-depth) * zt
 
         ring_start = len(verts)
         verts = np.vstack([verts, np.column_stack([xy, z])])
@@ -253,7 +256,8 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
     mat = bpy.data.materials.new("terrain_zones")
     nt = mat.node_tree
     bsdf = nt.nodes["Principled BSDF"]
-    bsdf.inputs["Roughness"].default_value = 0.8
+    bsdf.inputs["Roughness"].default_value = 0.95
+    bsdf.inputs["Specular IOR Level"].default_value = 0.1  # matte snow, no chrome sheen
 
     def node(kind, **props):
         n = nt.nodes.new(kind)
@@ -813,32 +817,49 @@ def add_features(config, H, mask, meta, parent=None):
           f"{len(py_verts) // 8} pylons, {len(ch_verts) // 8} chairs")
 
 
-def add_lighting_and_camera(obj):
+def add_lighting_and_camera(obj, cam_dist=1.15):
     from math import radians
 
-    # Physically-based sky (Nishita): blue sky, warm low sun, alpine light.
-    # The sky's own sun disc is the light source — no separate sun lamp.
+    # Art-directed sky: saturated blue gradient backdrop (physical Nishita
+    # sky came out grey and cold through AgX), plus a warm sun lamp and
+    # cool-blue ambient fill — the stylised alpine postcard look.
     world = bpy.data.worlds.new("world")
     nt = world.node_tree
-    sky = nt.nodes.new("ShaderNodeTexSky")
-    sky.sun_elevation = radians(22)   # low = raking shadows + warm tone
-    sky.sun_rotation = radians(0)     # chosen by A/B render test — best relief
-    sky.altitude = 2000               # metres — thinner alpine atmosphere
-    nt.links.new(sky.outputs["Color"], nt.nodes["Background"].inputs["Color"])
+    bg = nt.nodes["Background"]
+    coord = nt.nodes.new("ShaderNodeTexCoord")
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    nt.links.new(coord.outputs["Generated"], sep.inputs[0])
+    mr = nt.nodes.new("ShaderNodeMapRange")
+    mr.inputs["From Min"].default_value = -0.05   # view-direction Z
+    mr.inputs["From Max"].default_value = 0.65
+    nt.links.new(sep.outputs["Z"], mr.inputs["Value"])
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].color = (0.45, 0.68, 0.95, 1.0)  # pale horizon
+    ramp.color_ramp.elements[1].color = (0.045, 0.22, 0.65, 1.0) # deep zenith blue
+    nt.links.new(mr.outputs["Result"], ramp.inputs["Fac"])
+    nt.links.new(ramp.outputs["Color"], bg.inputs["Color"])
+    bg.inputs["Strength"].default_value = 1.3
     bpy.context.scene.world = world
 
-    # The physical sky is bright — pull exposure down and add contrast
+    # Warm golden sun, raking angle proven by earlier A/B tests
+    sun_data = bpy.data.lights.new("sun", type="SUN")
+    sun_data.energy = 4.5
+    sun_data.color = (1.0, 0.86, 0.62)
+    sun_data.angle = 0.05
+    sun = bpy.data.objects.new("Sun", sun_data)
+    sun.rotation_euler = (1.15, 0.0, 0.785)
+    bpy.context.collection.objects.link(sun)
+
+    # Standard transform keeps the saturated postcard colours (AgX greyed
+    # everything out — chosen by A/B renders)
     vs = bpy.context.scene.view_settings
-    vs.exposure = -1.3
-    try:
-        vs.look = "AgX - Punchy"
-    except TypeError:
-        pass  # look name differs across versions; default is fine
+    vs.view_transform = "Standard"
+    vs.exposure = -0.8
 
     # Frame the camera on the object's bounding box from a 3/4 angle
     bb = np.array(obj.bound_box)
     center = bb.mean(axis=0)
-    d = float(max(bb.max(axis=0) - bb.min(axis=0))) * 1.1
+    d = float(max(bb.max(axis=0) - bb.min(axis=0))) * cam_dist
 
     target = bpy.data.objects.new("CameraTarget", None)
     target.location = center
@@ -846,7 +867,7 @@ def add_lighting_and_camera(obj):
 
     cam_data = bpy.data.cameras.new("camera")
     cam = bpy.data.objects.new("Camera", cam_data)
-    cam.location = (center[0] + d, center[1] - d, center[2] + d * 0.8)
+    cam.location = (center[0] + d * 0.78, center[1] - d * 0.78, center[2] + d * 0.62)
     track = cam.constraints.new("TRACK_TO")
     track.target = target
     bpy.context.collection.objects.link(cam)
@@ -867,7 +888,7 @@ def main():
     add_features(config, heightmap, mask, meta, parent=obj)
     add_trees(config, heightmap, mask, landcover, meta, parent=obj)
     add_chalets(config, heightmap, mask, landcover, meta, parent=obj)
-    add_lighting_and_camera(obj)
+    add_lighting_and_camera(obj, config["terrain"].get("camera_distance", 1.15))
 
     # Open in Material Preview so colours show immediately (Solid mode is
     # Blender's default and renders everything grey)

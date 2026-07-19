@@ -12,7 +12,8 @@ north = 45.99
 [terrain]
 heightmap_size = 512
 target_size = 10.0
-z_exaggeration = 1.6
+z_exaggeration = 2.6
+camera_distance = 1.6
 
 [style]
 smooth_m = 35
@@ -28,9 +29,9 @@ simplify_m = 120
 [materials]
 treeline_m = 2000      # Chamonix treeline is lower than Val d'Isère
 treeline_blend_m = 150
-rock_slope_deg = 45
-rock_blend_deg = 7
-outcrop_slope_deg = 28
+rock_slope_deg = 62
+rock_blend_deg = 6
+outcrop_slope_deg = 46
 outcrop_scale = 6.0
 outcrop_amount = 0.45
 
@@ -46,7 +47,7 @@ height_m = 48
 snowy_share = 0.35
 
 [underside]
-depth_frac = 0.22
+depth_frac = 0.15
 rings = 14
 taper = 0.85
 lip_bulge = 0.045
