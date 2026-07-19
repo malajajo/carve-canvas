@@ -43,7 +43,7 @@ outcrop_scale = 6.0
 outcrop_amount = 0.15  # rock only where it's dramatic; snow stays clean
 
 [features]
-piste_radius = 0.012   # subtle; carved grooves carry the runs now
+piste_radius = 0.0    # ribbons retired: carved+brightened runs carry the pistes
 lift_clearance = 0.03
 pylon_spacing_m = 250
 min_piste_len_m = 200
@@ -52,7 +52,7 @@ carve_width_m = 30
 
 [trees]
 density = 1.0
-height_m = 22          # near-real: trees are actually visible at this scale
+height_m = 30
 snowy_share = 0.75     # winter: most trees snow-covered
 
 [chalets]

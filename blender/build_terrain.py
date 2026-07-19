@@ -44,7 +44,7 @@ def place(asset, loc, rot_z, scale, parent):
     o = asset.copy()
     o.location = loc
     o.rotation_euler = (0.0, 0.0, rot_z)
-    o.scale = (scale, scale, scale)
+    o.scale = scale if isinstance(scale, tuple) else (scale, scale, scale)
     o.parent = parent
     bpy.context.collection.objects.link(o)
     return o
@@ -362,7 +362,11 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
         sep = node("ShaderNodeSeparateColor")
         nt.links.new(attr.outputs["Color"], sep.inputs["Color"])
 
-        forest_fac = map_range(roughen(sep.outputs["Green"]), 0.25, 0.55)
+        forest_raw = map_range(roughen(sep.outputs["Green"]), 0.25, 0.55)
+        forest_scale = node("ShaderNodeMath", operation="MULTIPLY")
+        forest_scale.inputs[1].default_value = 0.3
+        nt.links.new(forest_raw, forest_scale.inputs[0])
+        forest_fac = forest_scale.outputs[0]
         glacier_fac = map_range(roughen(sep.outputs["Blue"]), 0.2, 0.6)
 
         # Winter logic: mapped bare ground shows as rock only on slopes that
@@ -464,10 +468,68 @@ def add_material(obj, config, elev0_m, z_scale, landcover=None):
     nt.links.new(shade.outputs[2], final.inputs[6])   # occluded -> shaded
     nt.links.new(mix_groom.outputs[2], final.inputs[7])  # open -> full colour
     nt.links.new(final.outputs[2], bsdf.inputs["Base Color"])
+
+    # Two-scale snow relief: soft drifts + fine surface texture
+    drift = node("ShaderNodeTexNoise")
+    drift.inputs["Scale"].default_value = 10.0
+    drift.inputs["Detail"].default_value = 2.0
+    fine = node("ShaderNodeTexNoise")
+    fine.inputs["Scale"].default_value = 90.0
+    fine.inputs["Detail"].default_value = 3.0
+    bump1 = node("ShaderNodeBump")
+    bump1.inputs["Strength"].default_value = 0.18
+    nt.links.new(drift.outputs["Fac"], bump1.inputs["Height"])
+    bump2 = node("ShaderNodeBump")
+    bump2.inputs["Strength"].default_value = 0.10
+    nt.links.new(fine.outputs["Fac"], bump2.inputs["Height"])
+    nt.links.new(bump1.outputs["Normal"], bump2.inputs["Normal"])
+    nt.links.new(bump2.outputs["Normal"], bsdf.inputs["Normal"])
     obj.data.materials.append(mat)
 
 
 WOOD = (0.30, 0.17, 0.09, 1.0)  # timber matched to the kit palette
+
+
+class Placer:
+    """Spatial-hash min-distance placement so objects never interpenetrate."""
+
+    def __init__(self, cell=0.1):
+        self.cell = cell
+        self.grid = {}
+
+    def try_place(self, x, y, r):
+        kx, ky = int(x // self.cell), int(y // self.cell)
+        reach = int((r + 0.08) // self.cell) + 1
+        for i in range(kx - reach, kx + reach + 1):
+            for j in range(ky - reach, ky + reach + 1):
+                for px, py, pr in self.grid.get((i, j), ()):
+                    if (px - x) ** 2 + (py - y) ** 2 < (pr + r) ** 2:
+                        return False
+        self.grid.setdefault((kx, ky), []).append((x, y, r))
+        return True
+
+
+def add_variation_nodes(mat, hue_amount=0.06, val_amount=0.3):
+    """Per-instance colour variation: every copy differs slightly."""
+    nt = mat.node_tree
+    bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf is None or not bsdf.inputs["Base Color"].links:
+        return
+    src_socket = bsdf.inputs["Base Color"].links[0].from_socket
+    info = nt.nodes.new("ShaderNodeObjectInfo")
+    hue = nt.nodes.new("ShaderNodeMapRange")
+    hue.inputs["To Min"].default_value = 0.5 - hue_amount / 2
+    hue.inputs["To Max"].default_value = 0.5 + hue_amount / 2
+    nt.links.new(info.outputs["Random"], hue.inputs["Value"])
+    val = nt.nodes.new("ShaderNodeMapRange")
+    val.inputs["To Min"].default_value = 1.0 - val_amount / 2
+    val.inputs["To Max"].default_value = 1.0 + val_amount / 2
+    nt.links.new(info.outputs["Random"], val.inputs["Value"])
+    hsv = nt.nodes.new("ShaderNodeHueSaturation")
+    nt.links.new(hue.outputs["Result"], hsv.inputs["Hue"])
+    nt.links.new(val.outputs["Result"], hsv.inputs["Value"])
+    nt.links.new(src_socket, hsv.inputs["Color"])
+    nt.links.new(hsv.outputs["Color"], bsdf.inputs["Base Color"])
 
 
 def erode(mask, n=3):
@@ -526,12 +588,20 @@ def add_trees(config, H, mask, landcover, groom, meta, assets, parent):
     variants = [assets[n] for n in ("tree-snow-a", "tree-snow-b", "tree-snow-c") if n in assets]
     plain = assets.get("tree")
     h_units = tcfg["height_m"] * scale * config["terrain"]["z_exaggeration"]
+    placer = config["_placer"]
+    n_placed = 0
     for i in range(len(rows)):
         snowy = rng.random() < tcfg["snowy_share"]
         asset = variants[int(rng.integers(len(variants)))] if (snowy or plain is None) else plain
-        s = h_units * rng.uniform(0.65, 1.4) / asset.dimensions.z
-        place(asset, (x[i], y[i], z[i] - 0.15 * h_units * 0.3), rng.uniform(0, 6.283), s, parent)
-    print(f"trees: {len(rows)} kit pines placed")
+        s = h_units * rng.uniform(0.55, 1.5) / asset.dimensions.z
+        canopy_r = 0.2 * asset.dimensions.x * s
+        if not placer.try_place(x[i], y[i], canopy_r):
+            continue
+        sz = s * rng.uniform(0.85, 1.3)  # height jitter independent of girth
+        place(asset, (x[i], y[i], z[i] - 0.02 * s), rng.uniform(0, 6.283),
+              (s, s, sz), parent)
+        n_placed += 1
+    print(f"trees: {n_placed} kit pines placed ({len(rows) - n_placed} culled by spacing)")
 
 
 def add_chalets(config, H, mask, landcover, meta, assets, parent):
@@ -561,17 +631,30 @@ def add_chalets(config, H, mask, landcover, meta, assets, parent):
     roofs = [assets[n] for n in ("cabin-roof-snow", "cabin-roof-snow-chimney",
                                  "cabin-roof-snow-point") if n in assets]
     size_units = config["chalets"]["size_m"] * scale
+
+    # Dominant village orientation: buildings align to the contour of the
+    # slope (perpendicular to downhill), with jitter — not uniform random
+    gy, gx = np.gradient(H)
+    r0, c0 = int(np.mean(rows)), int(np.mean(cols))
+    downhill = np.arctan2(-gy[r0, c0], gx[r0, c0])
+    contour = downhill + np.pi / 2
+
+    placer = config["_placer"]
     n_placed = 0
     for i in range(len(rows)):
-        s = size_units * rng.uniform(0.8, 1.7)
-        rot = rng.uniform(0, 6.283)
+        s = size_units * rng.uniform(0.75, 1.8)
+        if not placer.try_place(x[i], y[i], 0.62 * s):
+            continue
+        rot = contour + rng.uniform(-0.3, 0.3) + (np.pi / 2 if rng.random() < 0.25 else 0)
         base_z = z[i] - 0.12 * s
-        body = place(body_proto, (x[i], y[i], base_z), rot, s, parent)
+        aspect = rng.uniform(0.85, 1.25)
+        place(body_proto, (x[i], y[i], base_z), rot, (s, s * aspect, s), parent)
         roof = roofs[int(rng.integers(len(roofs)))]
         rs = s * 1.05 / roof.dimensions.x
-        place(roof, (x[i], y[i], base_z + 0.62 * s), rot, rs, parent)
+        place(roof, (x[i], y[i], base_z + 0.62 * s), rot,
+              (rs, rs * aspect, rs), parent)
         n_placed += 1
-    print(f"chalets: {n_placed} kit-roofed buildings placed")
+    print(f"chalets: {n_placed} buildings placed ({len(rows) - n_placed} culled by spacing)")
 
 
 def add_props(config, H, mask, landcover, meta, assets, parent):
@@ -587,10 +670,13 @@ def add_props(config, H, mask, landcover, meta, assets, parent):
     kinds = [("lantern", 3.2), ("bench", 1.4), ("snowman", 2.0), ("sled", 1.0), ("snow-pile", 1.2)]
     kinds = [(assets[n], h) for n, h in kinds if n in assets]
     zx = config["terrain"]["z_exaggeration"]
+    placer = config["_placer"]
     n = 0
     for i in range(len(rows)):
         asset, h_m = kinds[int(rng.integers(len(kinds)))]
         s = h_m * scale * zx / asset.dimensions.z
+        if not placer.try_place(x[i], y[i], 0.4 * asset.dimensions.x * s):
+            continue
         place(asset, (x[i], y[i], z[i] - 0.05 * s), rng.uniform(0, 6.283), s, parent)
         n += 1
     print(f"props: {n} village props placed")
@@ -897,9 +983,17 @@ def main():
     assets = load_assets(["tree-snow-a", "tree-snow-b", "tree-snow-c", "tree",
                           "cabin-roof-snow", "cabin-roof-snow-chimney", "cabin-roof-snow-point",
                           "lantern", "bench", "snowman", "sled", "snow-pile"])
-    add_trees(config, heightmap, mask, landcover, groom, meta, assets, parent=obj)
+    # Per-instance colour variation on every kit material
+    for mat in bpy.data.materials:
+        if mat.name.startswith("colormap"):
+            add_variation_nodes(mat)
+    config["_placer"] = Placer()
     add_chalets(config, heightmap, mask, landcover, meta, assets, parent=obj)
+    add_trees(config, heightmap, mask, landcover, groom, meta, assets, parent=obj)
     add_props(config, heightmap, mask, landcover, meta, assets, parent=obj)
+    for mat in bpy.data.materials:
+        if mat.name == "chalet_wood":
+            add_variation_nodes(mat, hue_amount=0.04, val_amount=0.5)
 
     # Village anchor (scene coords) for postcard composition
     village = None
